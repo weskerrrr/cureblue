@@ -1,0 +1,8 @@
+{
+  "name": "cureblue",
+  "private": true,
+  "description": "Cloudflare Pages deploy wrapper for artmind-app",
+  "scripts": {
+    "deploy": "cd artmind-app && npx wrangler pages deploy web --project-name=cureblue"
+  }
+}
