@@ -1,0 +1,15 @@
+# Cloudflare Pages + Functions 配置
+# 部署对象：心绘 ArtMind（静态前端 web/ + Pages Functions API + D1 数据库）
+
+name = "cureblue"
+compatibility_date = "2024-11-01"
+
+# 静态资源目录（Cloudflare Pages 会托管此目录，functions/ 自动编译为 API 路由）
+pages_build_output_dir = "web"
+
+# D1 数据库绑定：代码中通过 env.DB 访问
+# database_id 需在创建 D1 后填写：wrangler d1 create artmind
+[[d1_databases]]
+binding = "DB"
+database_name = "artmind"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"

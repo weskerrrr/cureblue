@@ -1,0 +1,17 @@
+{
+  "name": "artmind",
+  "version": "1.0.0",
+  "private": true,
+  "description": "心绘 ArtMind — 视听障碍青少年 AI 艺术疗愈订阅 APP（Cloudflare Pages + Functions + D1）",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler pages dev",
+    "db:init:local": "wrangler d1 execute artmind --local --file=./schema/d1.sql",
+    "db:init:remote": "wrangler d1 execute artmind --remote --file=./schema/d1.sql",
+    "db:create": "wrangler d1 create artmind",
+    "deploy": "wrangler pages deploy web --project-name=cureblue"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}
