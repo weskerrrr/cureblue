@@ -1,6 +1,6 @@
 // POST /api/ai — AI 多模态创作网关（服务端权威额度校验）
 // body: { capability: "speech2image"|"desc2music"|"visualize"|"lipread"|"artguide", prompt }
-// 说明：真实模型调用为可替换点（此处返回结构化的无障碍配套产物）。
+// 生图使用 Pollinations 公共服务；其余能力保留结构化演示结果。
 import { json, error, preflight, getUser, uuid } from "../_lib/response.js";
 import { ensureUser, getEntitlements, getDailyUsage, incrDailyUsage, logAiInvocation } from "../_lib/db.js";
 
@@ -14,8 +14,9 @@ export async function onRequestPost({ request, env }) {
   if (!env.DB) return error("D1 未绑定（env.DB）", 503);
   const t0 = Date.now();
   const { id, role } = getUser(request);
-  const { capability, prompt = "" } = await request.json().catch(() => ({}));
+  const { capability, prompt = "", options = {} } = await request.json().catch(() => ({}));
   if (!capability) return error("缺少 capability 参数");
+  if (String(prompt).length > 300) return error("画面描述不能超过 300 个字符");
 
   await ensureUser(env.DB, id, role);
   const ent = await getEntitlements(env.DB, id);
@@ -35,7 +36,7 @@ export async function onRequestPost({ request, env }) {
     await incrDailyUsage(env.DB, id);
   }
 
-  const result = generate(capability, prompt);
+  const result = generate(capability, prompt, options);
   await logAiInvocation(env.DB, id, capability, true, Date.now() - t0);
 
   const used = isPro ? -1 : await getDailyUsage(env.DB, id);
@@ -43,17 +44,38 @@ export async function onRequestPost({ request, env }) {
   return json({ ok: true, capability, result, aiQuotaLeft: quotaLeft });
 }
 
-// 生成结果（含无障碍配套产物）；真实项目在此接扩散/音乐/多模态模型
-function generate(capability, prompt) {
+// 生成结果（含无障碍配套产物）；商业化时可将生图 URL 替换为具备 SLA 的模型供应商
+const IMAGE_STYLES = {
+  auto: "温暖治愈风格",
+  watercolor: "水彩画风格，柔和晕染",
+  cartoon: "可爱卡通风格，明快线条",
+  crayon: "儿童蜡笔画风格",
+  oil: "油画风格，厚重笔触",
+  pixel: "像素艺术风格",
+};
+
+function generate(capability, prompt, options = {}) {
   const p = (prompt || "").trim() || "一片宁静的蓝色海洋";
   switch (capability) {
-    case "speech2image":
+    case "speech2image": {
+      const style = IMAGE_STYLES[options.style] ? options.style : "auto";
+      const styleHint = IMAGE_STYLES[style];
+      const seed = crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000;
+      const styledPrompt = `${p}, ${styleHint}, 柔和色彩, 适合青少年, 安全友善, no text`;
+      const imageUrl =
+        `https://image.pollinations.ai/prompt/${encodeURIComponent(styledPrompt)}` +
+        `?width=768&height=768&seed=${seed}&nologo=true&safe=true`;
       return {
         kind: "image",
         assetId: uuid(),
+        url: imageUrl,
+        prompt: p,
+        seed,
+        style,
         altText: `画作已生成。${p}。主色为蓝色与暖金，构图开阔，整体情绪宁静而充满希望。`,
         palette: ["深靛蓝", "雾青", "暖金"],
       };
+    }
     case "desc2music":
       return { kind: "music", durationSec: 24, key: "C major", caption: `已根据"${p}"生成一段舒缓的大调旋律，约 24 秒。` };
     case "visualize":

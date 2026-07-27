@@ -9,6 +9,37 @@
 
 const D = window.ARTMIND_DATA;
 const API = window.ArtMindAPI;
+const ART_STYLES = [
+  { id: "auto", label: "自动", hint: "温暖治愈风格" },
+  { id: "watercolor", label: "水彩", hint: "水彩画风格，柔和晕染" },
+  { id: "cartoon", label: "卡通", hint: "可爱卡通风格，明快线条" },
+  { id: "crayon", label: "蜡笔", hint: "儿童蜡笔画风格" },
+  { id: "oil", label: "油画", hint: "油画风格，厚重笔触" },
+  { id: "pixel", label: "像素", hint: "像素艺术风格" },
+];
+const ART_EXAMPLES = [
+  "一只在草地上奔跑的小狗，阳光很温暖",
+  "夜空里有一弯月亮和很多星星",
+  "海边的灯塔，海浪轻轻拍打",
+  "森林里的小木屋，烟囱冒着炊烟",
+];
+const GALLERY_KEY = "artmind_gallery";
+
+function loadGallery() {
+  try {
+    const items = JSON.parse(localStorage.getItem(GALLERY_KEY) || "[]");
+    return Array.isArray(items) ? items.slice(0, 12) : [];
+  } catch {
+    return [];
+  }
+}
+
+function escapeHTML(value) {
+  return String(value ?? "").replace(
+    /[&<>"']/g,
+    (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char],
+  );
+}
 
 const state = {
   role: "blind", // blind | deaf | therapist | parent
@@ -20,6 +51,11 @@ const state = {
   tasks: structuredClone(D.tasks),
   posts: structuredClone(D.posts), // 社区动态（后端可用时用服务端数据）
   apiReady: false,
+  artStyle: "auto",
+  artPrompt: "",
+  currentArtwork: null,
+  gallery: loadGallery(),
+  generating: false,
 };
 
 /* ---------------- 无障碍三通道反馈 ---------------- */
@@ -101,54 +137,217 @@ function renderStudio() {
   const el = document.getElementById("view-studio");
   const blind = state.role === "blind";
   const deaf = state.role === "deaf";
+  const artwork = state.currentArtwork;
+  const styleLabel = ART_STYLES.find((item) => item.id === state.artStyle)?.label || "自动";
 
   el.innerHTML = `
     <div class="view-head">
-      <h1>AI 多模态艺术创作工坊</h1>
-      <p>用你最擅长的感官去创作。${blind ? "全程语音操控与朗读反馈。" : deaf ? "全程字幕与视觉可视化反馈。" : "支持多模态创作。"}</p>
+      <h1>AI 多模态艺术创作工坊 <span class="real-ai-badge">真实生图</span></h1>
+      <p>说出或写下你想画的内容，选择喜欢的画风，AI 会生成一幅可以保存的真实画作。${blind ? "生成后将自动朗读画面描述。" : deaf ? "所有状态均以文字同步呈现。" : ""}</p>
     </div>
     <div class="canvas-wrap">
-      <div>
-        <div class="canvas" id="canvas" role="img" aria-label="创作画布，当前为空">
-          <div>
-            <p style="font-size:1.1rem;color:var(--text)">画布预览区</p>
-            <p>${blind ? "口述你想画的内容，AI 将生成画作并为你朗读。" : "输入描述或上传旋律，AI 将为你生成与可视化。"}</p>
+      <div class="studio-result-column">
+        <div class="canvas artwork-canvas ${artwork ? "has-artwork" : ""}" id="canvas"
+          role="region" aria-label="${artwork ? `已生成画作：${escapeHTML(artwork.prompt)}` : "创作画布，当前为空"}" aria-live="polite">
+          ${artwork ? `
+            <figure class="generated-artwork">
+              <img src="${artwork.url}" alt="${escapeHTML(artwork.altText)}" />
+              <figcaption>
+                <span class="tag tag-deaf">${escapeHTML(artwork.styleLabel || styleLabel)}风格</span>
+                <strong>${escapeHTML(artwork.prompt)}</strong>
+              </figcaption>
+            </figure>
+          ` : `
+            <div class="canvas-empty">
+              <span class="canvas-empty-mark" aria-hidden="true">✦</span>
+              <p>你的画会出现在这里</p>
+              <small>写好描述后，选择“开始作画”</small>
+            </div>
+          `}
+        </div>
+        ${artwork ? `
+          <div class="artwork-actions" role="group" aria-label="画作操作">
+            <button class="btn btn-primary" id="save-artwork">保存到作品集</button>
+            <button class="btn btn-ghost" id="read-artwork">🔊 朗读描述</button>
+            <button class="btn btn-ghost" id="redraw-artwork">重画一张</button>
+            <button class="btn btn-ghost" id="download-artwork">下载图片</button>
+          </div>
+        ` : ""}
+      </div>
+      <div class="card compose-card">
+        <div class="field">
+          <label for="prompt">描述你的画面</label>
+          <textarea id="prompt" rows="4" maxlength="300"
+            placeholder="例如：一只在草地上奔跑的小狗，阳光很温暖"
+            ${state.generating ? "disabled" : ""}>${escapeHTML(state.artPrompt)}</textarea>
+          <div class="field-foot"><span id="prompt-count">${state.artPrompt.length} / 300</span></div>
+        </div>
+
+        <div class="field">
+          <span class="field-label" id="example-label">快速试试</span>
+          <div class="prompt-examples" role="group" aria-labelledby="example-label">
+            ${ART_EXAMPLES.map((example) => `
+              <button class="example-chip" type="button" data-example="${escapeHTML(example)}"
+                ${state.generating ? "disabled" : ""}>${escapeHTML(example)}</button>
+            `).join("")}
           </div>
         </div>
-      </div>
-      <div class="card">
+
         <div class="field">
-          <label for="prompt">${blind ? "🎙️ 语音 / 文字描述" : "✍️ 描述你的创作"}</label>
-          <textarea id="prompt" rows="3" placeholder="例如：一片宁静的蓝色海洋，远处有暖金色的日出"></textarea>
+          <span class="field-label" id="style-label">画面风格</span>
+          <div class="art-style-picker" role="group" aria-labelledby="style-label">
+            ${ART_STYLES.map((item) => `
+              <button type="button" class="style-choice ${state.artStyle === item.id ? "selected" : ""}"
+                data-style="${item.id}" aria-pressed="${state.artStyle === item.id}"
+                ${state.generating ? "disabled" : ""}>${item.label}</button>
+            `).join("")}
+          </div>
         </div>
 
-        ${blind ? `
-          <button class="btn btn-primary btn-block" data-ai="image">🎨 生成画作（含音频缩略图）</button>
-          <button class="btn btn-ghost btn-block" data-ai="music" style="margin-top:8px">🎵 把描述转成音乐</button>
-        ` : ``}
-
-        ${deaf ? `
-          <button class="btn btn-primary btn-block" data-ai="visualize">📊 把声音/旋律实时可视化</button>
-          <button class="btn btn-ghost btn-block" data-ai="image" style="margin-top:8px">🖼️ 图文一键生成画作</button>
-          <button class="btn btn-ghost btn-block locked" data-ai="lipread" style="margin-top:8px">
-            👄 唇语识别辅助创作 <span class="lock-pill">PRO</span>
+        <div class="compose-actions">
+          <button class="btn btn-ghost" id="voice-prompt" ${state.generating ? "disabled" : ""}>🎙️ 语音输入</button>
+          <button class="btn btn-primary" data-ai="image" ${state.generating ? "disabled" : ""}>
+            ${state.generating ? "AI 正在作画…" : "🎨 开始作画"}
           </button>
-        ` : ``}
-
-        ${!blind && !deaf ? `<button class="btn btn-primary btn-block" data-ai="image">🎨 生成画作</button>` : ``}
-
+        </div>
         <div class="quota" aria-live="polite">
           ${isPro()
             ? `<span class="tag tag-pro">PRO</span> 无限次 AI 创作`
             : `本日剩余免费生成次数：<strong id="quota-num">${state.aiQuotaLeft}</strong> / 3`}
         </div>
+        <p class="service-note">画作由 Pollinations AI 生成，通常需要 5–30 秒。</p>
       </div>
     </div>
+
+    ${state.gallery.length ? `
+      <section class="gallery-section" aria-labelledby="my-gallery-title">
+        <div class="gallery-heading">
+          <h2 id="my-gallery-title">我的作品集</h2>
+          <span>${state.gallery.length} 幅</span>
+        </div>
+        <div class="art-gallery">
+          ${state.gallery.map((item, index) => `
+            <article class="gallery-art-card">
+              <img src="${item.url}" alt="${escapeHTML(item.altText)}" loading="lazy" />
+              <div><strong>${escapeHTML(item.prompt)}</strong>
+                <button type="button" class="gallery-remove" data-remove-art="${index}" aria-label="从作品集移除：${escapeHTML(item.prompt)}">移除</button>
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+    ` : ""}
   `;
 
+  const promptInput = el.querySelector("#prompt");
+  promptInput?.addEventListener("input", () => {
+    state.artPrompt = promptInput.value;
+    el.querySelector("#prompt-count").textContent = `${promptInput.value.length} / 300`;
+  });
+  el.querySelectorAll("[data-example]").forEach((button) => button.addEventListener("click", () => {
+    promptInput.value = button.dataset.example;
+    state.artPrompt = button.dataset.example;
+    el.querySelector("#prompt-count").textContent = `${promptInput.value.length} / 300`;
+    announce(`已填入示例：${button.dataset.example}`);
+  }));
+  el.querySelectorAll("[data-style]").forEach((button) => button.addEventListener("click", () => {
+    state.artStyle = button.dataset.style;
+    renderStudio();
+    announce(`已选择${button.textContent}风格`);
+  }));
   el.querySelectorAll("[data-ai]").forEach((btn) =>
     btn.addEventListener("click", () => runAI(btn.dataset.ai))
   );
+  el.querySelector("#voice-prompt")?.addEventListener("click", captureArtworkPrompt);
+  el.querySelector("#save-artwork")?.addEventListener("click", saveCurrentArtwork);
+  el.querySelector("#read-artwork")?.addEventListener("click", () => announce(state.currentArtwork.altText));
+  el.querySelector("#redraw-artwork")?.addEventListener("click", () => runAI("image"));
+  el.querySelector("#download-artwork")?.addEventListener("click", downloadCurrentArtwork);
+  el.querySelectorAll("[data-remove-art]").forEach((button) => button.addEventListener("click", () => {
+    state.gallery.splice(Number(button.dataset.removeArt), 1);
+    localStorage.setItem(GALLERY_KEY, JSON.stringify(state.gallery));
+    renderStudio();
+    announce("已从作品集移除一幅画。");
+  }));
+}
+
+function captureArtworkPrompt() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    announce("当前浏览器不支持语音输入，请使用 Chrome、Edge，或直接输入文字。", { assertive: true });
+    return;
+  }
+  const button = document.getElementById("voice-prompt");
+  const input = document.getElementById("prompt");
+  const recognition = new SpeechRecognition();
+  recognition.lang = "zh-CN";
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  button.disabled = true;
+  button.textContent = "正在聆听…";
+  announce("请开始说话，我在听。");
+  recognition.onresult = (event) => {
+    const text = event.results?.[0]?.[0]?.transcript?.trim() || "";
+    if (text) {
+      input.value = input.value ? `${input.value} ${text}` : text;
+      state.artPrompt = input.value;
+      input.dispatchEvent(new Event("input"));
+      announce(`我听到了：${text}`);
+    }
+  };
+  recognition.onerror = (event) => {
+    announce(event.error === "not-allowed"
+      ? "需要麦克风权限，请在浏览器中允许使用麦克风。"
+      : "语音输入没有成功，请再试一次或直接打字。", { assertive: true });
+  };
+  recognition.onend = () => {
+    button.disabled = false;
+    button.textContent = "🎙️ 语音输入";
+  };
+  recognition.start();
+}
+
+function saveCurrentArtwork() {
+  if (!state.currentArtwork) return;
+  if (state.gallery.some((item) => item.url === state.currentArtwork.url)) {
+    announce("这幅画已经在作品集里了。");
+    return;
+  }
+  state.gallery.unshift(state.currentArtwork);
+  state.gallery = state.gallery.slice(0, 12);
+  localStorage.setItem(GALLERY_KEY, JSON.stringify(state.gallery));
+  renderStudio();
+  announce("已保存到你的作品集。");
+}
+
+async function downloadCurrentArtwork() {
+  if (!state.currentArtwork) return;
+  announce("正在准备下载。");
+  try {
+    const response = await fetch(state.currentArtwork.url);
+    if (!response.ok) throw new Error("download-failed");
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = `心绘画作-${Date.now()}.jpg`;
+    link.click();
+    URL.revokeObjectURL(objectUrl);
+    announce("已开始下载你的画作。");
+  } catch {
+    window.open(state.currentArtwork.url, "_blank", "noopener");
+    announce("画作已在新标签打开，可以长按或右键保存。");
+  }
+}
+
+function preloadImage(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const timer = setTimeout(() => reject(new Error("timeout")), 60000);
+    image.onload = () => { clearTimeout(timer); resolve(); };
+    image.onerror = () => { clearTimeout(timer); reject(new Error("load-failed")); };
+    image.src = url;
+  });
 }
 
 // 前端能力名 → 后端 capability 名
@@ -156,38 +355,67 @@ const AI_CAPABILITY = { image: "speech2image", music: "desc2music", visualize: "
 
 // 调用 AI：后端可用时走 /api/ai（服务端权威额度），否则本地演示逻辑
 async function runAI(kind) {
-  const prompt = (document.getElementById("prompt")?.value || "").trim() || "一片宁静的蓝色海洋";
-
-  if (state.apiReady) {
-    const capability = AI_CAPABILITY[kind] || "speech2image";
-    const resp = await API.ai(capability, prompt);
-    if (!resp || resp.ok === false) {
-      if (resp && resp.code === "PRO_REQUIRED") return openPaywall("该能力为会员专享功能。");
-      if (resp && resp.code === "FREE_QUOTA_EXCEEDED") return openPaywall("今日免费 AI 生成次数已用完，升级订阅可无限创作。");
-      announce("生成失败，请稍后再试。", { assertive: true });
-      return;
-    }
-    if (typeof resp.aiQuotaLeft === "number") {
-      state.aiQuotaLeft = resp.aiQuotaLeft < 0 ? Infinity : resp.aiQuotaLeft;
-      const q = document.getElementById("quota-num");
-      if (q && resp.aiQuotaLeft >= 0) q.textContent = resp.aiQuotaLeft;
-    }
-    renderAIResult(kind, prompt, resp.result);
+  const prompt = (document.getElementById("prompt")?.value || state.artPrompt || "").trim();
+  state.artPrompt = prompt;
+  if (!prompt) {
+    announce("请先说出或写下你想画的内容。", { assertive: true });
+    document.getElementById("prompt")?.focus();
     return;
   }
+  if (kind === "image") {
+    state.generating = true;
+    renderStudio();
+    const canvas = document.getElementById("canvas");
+    canvas.innerHTML = `<div class="art-loading"><span class="art-spinner" aria-hidden="true"></span><strong>AI 正在为你作画…</strong><small>请稍候，通常需要 5–30 秒</small></div>`;
+    announce("正在为你作画，请稍候。");
+  }
 
-  // ---- 降级：本地演示逻辑 ----
-  if (kind === "lipread" && !requirePro("唇语识别辅助创作为会员专享功能。")) return;
-  if (!isPro()) {
-    if (state.aiQuotaLeft <= 0) {
-      openPaywall("今日免费 AI 生成次数已用完，升级订阅可无限创作。");
+  try {
+    if (state.apiReady) {
+      const capability = AI_CAPABILITY[kind] || "speech2image";
+      const resp = await API.ai(capability, prompt, { style: state.artStyle });
+      if (!resp || resp.ok === false) {
+        state.generating = false;
+        if (resp && resp.code === "PRO_REQUIRED") return openPaywall("该能力为会员专享功能。");
+        if (resp && resp.code === "FREE_QUOTA_EXCEEDED") return openPaywall("今日免费 AI 生成次数已用完，升级订阅可无限创作。");
+        renderStudio();
+        announce("生成失败，请稍后再试。", { assertive: true });
+        return;
+      }
+      if (typeof resp.aiQuotaLeft === "number") {
+        state.aiQuotaLeft = resp.aiQuotaLeft < 0 ? Infinity : resp.aiQuotaLeft;
+      }
+      if (kind === "image" && resp.result?.url) await preloadImage(resp.result.url);
+      state.generating = false;
+      renderAIResult(kind, prompt, resp.result);
       return;
     }
-    state.aiQuotaLeft -= 1;
-    const q = document.getElementById("quota-num");
-    if (q) q.textContent = state.aiQuotaLeft;
+
+    // ---- 降级：没有 Cloudflare Functions 时仍直接使用真实公共生图服务 ----
+    if (kind === "lipread" && !requirePro("唇语识别辅助创作为会员专享功能。")) return;
+    if (!isPro()) {
+      if (state.aiQuotaLeft <= 0) {
+        state.generating = false;
+        return openPaywall("今日免费 AI 生成次数已用完，升级订阅可无限创作。");
+      }
+      state.aiQuotaLeft -= 1;
+    }
+    let fallbackResult = null;
+    if (kind === "image") {
+      const style = ART_STYLES.find((item) => item.id === state.artStyle) || ART_STYLES[0];
+      const seed = Math.floor(Math.random() * 1_000_000);
+      const styled = `${prompt}, ${style.hint}, 柔和色彩, 适合青少年, 安全友善, no text`;
+      const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(styled)}?width=768&height=768&seed=${seed}&nologo=true&safe=true`;
+      fallbackResult = { url, prompt, seed, style: style.id, altText: `这是一幅${style.label}风格的画，画的是${prompt}。` };
+      await preloadImage(url);
+    }
+    state.generating = false;
+    renderAIResult(kind, prompt, fallbackResult);
+  } catch {
+    state.generating = false;
+    renderStudio();
+    announce("作画没有成功，可能是网络问题，请稍后重新尝试。", { assertive: true });
   }
-  renderAIResult(kind, prompt, null);
 }
 
 // 渲染 AI 结果到画布（服务端结果与本地演示共用；result 为空时用本地文案）
@@ -211,14 +439,18 @@ function renderAIResult(kind, prompt, result) {
     return;
   }
 
-  // image：生成画作并给出 AI 语音深描
-  canvas.setAttribute("aria-label", `已生成画作：${prompt}`);
-  canvas.innerHTML = `
-    <div style="width:100%">
-      <div style="height:180px;border-radius:12px;background:linear-gradient(135deg,#1f6feb,#2ee6c5,#ffd591)"></div>
-      <p style="margin-top:12px;color:var(--text)"><strong>${prompt}</strong></p>
-    </div>`;
-  const desc = (result && result.altText) || `画作已生成。${prompt}。主色为蓝色与暖金，构图开阔，整体情绪宁静而充满希望。`;
+  // image：展示真实生成图片，并提供保存/下载/朗读
+  const style = ART_STYLES.find((item) => item.id === (result?.style || state.artStyle)) || ART_STYLES[0];
+  const desc = result?.altText || `这是一幅${style.label}风格的画，画的是${prompt}。`;
+  state.currentArtwork = {
+    ...result,
+    prompt,
+    style: style.id,
+    styleLabel: style.label,
+    altText: desc,
+    createdAt: new Date().toISOString(),
+  };
+  renderStudio();
   announce(desc);
 }
 

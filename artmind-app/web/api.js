@@ -59,8 +59,8 @@ window.ArtMindAPI = (() => {
     },
 
     // 返回 { ok, result, aiQuotaLeft } 或 { ok:false, code }
-    async ai(capability, prompt) {
-      const { data } = await req("/api/ai", "POST", { capability, prompt });
+    async ai(capability, prompt, options = {}) {
+      const { data } = await req("/api/ai", "POST", { capability, prompt, options });
       return data;
     },
 
