@@ -403,11 +403,12 @@ async function runAI(kind) {
     let fallbackResult = null;
     if (kind === "image") {
       const style = ART_STYLES.find((item) => item.id === state.artStyle) || ART_STYLES[0];
-      const seed = Math.floor(Math.random() * 1_000_000);
-      const styled = `${prompt}, ${style.hint}, 柔和色彩, 适合青少年, 安全友善, no text`;
-      const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(styled)}?width=768&height=768&seed=${seed}&nologo=true&safe=true`;
-      fallbackResult = { url, prompt, seed, style: style.id, altText: `这是一幅${style.label}风格的画，画的是${prompt}。` };
-      await preloadImage(url);
+      const built = await window.ArtMindImage.build({ prompt, style: style.id });
+      fallbackResult = {
+        ...built,
+        altText: `这是一幅${style.label}风格的画，画的是${prompt}。`,
+      };
+      await preloadImage(built.url);
     }
     state.generating = false;
     renderAIResult(kind, prompt, fallbackResult);

@@ -3,6 +3,7 @@
 // 生图使用 Pollinations 公共服务；其余能力保留结构化演示结果。
 import { json, error, preflight, getUser, uuid } from "../_lib/response.js";
 import { ensureUser, getEntitlements, getDailyUsage, incrDailyUsage, logAiInvocation } from "../_lib/db.js";
+import { buildImageResult } from "../_lib/imageGen.js";
 
 const PRO_ONLY = new Set(["lipread"]);
 
@@ -36,7 +37,7 @@ export async function onRequestPost({ request, env }) {
     await incrDailyUsage(env.DB, id);
   }
 
-  const result = generate(capability, prompt, options);
+  const result = await generate(capability, prompt, options);
   await logAiInvocation(env.DB, id, capability, true, Date.now() - t0);
 
   const used = isPro ? -1 : await getDailyUsage(env.DB, id);
@@ -44,35 +45,14 @@ export async function onRequestPost({ request, env }) {
   return json({ ok: true, capability, result, aiQuotaLeft: quotaLeft });
 }
 
-// 生成结果（含无障碍配套产物）；商业化时可将生图 URL 替换为具备 SLA 的模型供应商
-const IMAGE_STYLES = {
-  auto: "温暖治愈风格",
-  watercolor: "水彩画风格，柔和晕染",
-  cartoon: "可爱卡通风格，明快线条",
-  crayon: "儿童蜡笔画风格",
-  oil: "油画风格，厚重笔触",
-  pixel: "像素艺术风格",
-};
-
-function generate(capability, prompt, options = {}) {
+async function generate(capability, prompt, options = {}) {
   const p = (prompt || "").trim() || "一片宁静的蓝色海洋";
   switch (capability) {
     case "speech2image": {
-      const style = IMAGE_STYLES[options.style] ? options.style : "auto";
-      const styleHint = IMAGE_STYLES[style];
-      const seed = crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000;
-      const styledPrompt = `${p}, ${styleHint}, 柔和色彩, 适合青少年, 安全友善, no text`;
-      const imageUrl =
-        `https://image.pollinations.ai/prompt/${encodeURIComponent(styledPrompt)}` +
-        `?width=768&height=768&seed=${seed}&nologo=true&safe=true`;
+      const image = await buildImageResult(p, options.style);
       return {
-        kind: "image",
+        ...image,
         assetId: uuid(),
-        url: imageUrl,
-        prompt: p,
-        seed,
-        style,
-        altText: `画作已生成。${p}。主色为蓝色与暖金，构图开阔，整体情绪宁静而充满希望。`,
         palette: ["深靛蓝", "雾青", "暖金"],
       };
     }
