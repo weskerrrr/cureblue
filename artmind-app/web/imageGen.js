@@ -96,7 +96,7 @@ window.ArtMindImage = (() => {
     const url =
       `${ENDPOINT}${encodeURIComponent(englishPrompt)}` +
       `?width=768&height=768&seed=${seed}&model=flux&private=true`;
-    return { url, prompt: clean, seed, style: styleId, englishPrompt };
+    return { url, prompt: clean, seed, style: styleId, englishPrompt, provider: "pollinations", providerLabel: "Pollinations" };
   }
 
   return { build };

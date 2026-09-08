@@ -1,6 +1,6 @@
 // POST /api/ai — AI 多模态创作网关（服务端权威额度校验）
 // body: { capability: "speech2image"|"desc2music"|"visualize"|"lipread"|"artguide", prompt }
-// 生图使用 Pollinations 公共服务；其余能力保留结构化演示结果。
+// 生图优先 Cloudflare Workers AI，失败回退 Pollinations；其余能力保留结构化演示结果。
 import { json, error, preflight, getUser, uuid } from "../_lib/response.js";
 import { ensureUser, getEntitlements, getDailyUsage, incrDailyUsage, logAiInvocation } from "../_lib/db.js";
 import { buildImageResult } from "../_lib/imageGen.js";
@@ -28,16 +28,22 @@ export async function onRequestPost({ request, env }) {
     return json({ ok: false, code: "PRO_REQUIRED", error: "该能力为会员专享。" }, 402);
   }
 
-  // 免费额度校验（服务端权威）
+  // 免费额度校验（服务端权威）；成功生成后再扣次，避免接口抖动白白扣额度
   if (!isPro) {
     const used = await getDailyUsage(env.DB, id);
     if (used >= ent.ai_daily_quota) {
       return json({ ok: false, code: "FREE_QUOTA_EXCEEDED", error: "今日免费次数已用完。" }, 402);
     }
-    await incrDailyUsage(env.DB, id);
   }
 
-  const result = await generate(capability, prompt, options);
+  let result;
+  try {
+    result = await generate(capability, prompt, options, env);
+  } catch {
+    return json({ ok: false, error: "生图服务暂时不可用，请换一个接口或稍后重试。" }, 502);
+  }
+
+  if (!isPro) await incrDailyUsage(env.DB, id);
   await logAiInvocation(env.DB, id, capability, true, Date.now() - t0);
 
   const used = isPro ? -1 : await getDailyUsage(env.DB, id);
@@ -45,11 +51,11 @@ export async function onRequestPost({ request, env }) {
   return json({ ok: true, capability, result, aiQuotaLeft: quotaLeft });
 }
 
-async function generate(capability, prompt, options = {}) {
+async function generate(capability, prompt, options = {}, env) {
   const p = (prompt || "").trim() || "一片宁静的蓝色海洋";
   switch (capability) {
     case "speech2image": {
-      const image = await buildImageResult(p, options.style);
+      const image = await buildImageResult(p, options.style, env, options.provider);
       return {
         ...image,
         assetId: uuid(),

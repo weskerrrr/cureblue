@@ -211,6 +211,7 @@ body[data-contrast="high"] { background: #000; }
 }
 .example-chip:hover { color: var(--text); border-color: var(--accent); }
 .art-style-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.provider-picker { grid-template-columns: 1fr 1fr; }
 .style-choice {
   min-height: 42px; border-radius: 10px; border: 1px solid rgba(255,255,255,.16);
   color: var(--text); background: var(--bg-2); font-weight: 700; cursor: pointer;

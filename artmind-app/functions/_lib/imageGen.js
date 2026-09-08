@@ -1,9 +1,10 @@
 /**
- * 心绘生图：中文提示译成英文 + Pollinations flux。
- * 供 Pages Function 使用（Workers 运行时）。
+ * 心绘生图：中文提示译成英文后，优先用 Cloudflare Workers AI（Flux Schnell），
+ * 失败再回退 Pollinations。两种接口都在 Worker 内取回图片，前端只收 data URL。
  */
 
-const ENDPOINT = "https://image.pollinations.ai/prompt/";
+const POLLINATIONS = "https://image.pollinations.ai/prompt/";
+const CF_MODEL = "@cf/black-forest-labs/flux-1-schnell";
 
 const STYLE_EN = {
   auto: "warm healing children's illustration, soft colors, storybook",
@@ -37,6 +38,11 @@ const PHRASE_EN = [
   ["有点难过", "a little sad but gentle"],
   ["兴奋", "excited"],
 ];
+
+const PROVIDER_LABEL = {
+  cloudflare: "Cloudflare Flux",
+  pollinations: "Pollinations",
+};
 
 function hasChinese(text) {
   return /[\u4e00-\u9fff]/.test(text);
@@ -90,7 +96,57 @@ async function translateZhToEn(text) {
   return local;
 }
 
-export async function buildImageResult(prompt, styleId = "auto") {
+function bytesToBase64(buffer) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const slice = bytes.subarray(i, i + chunk);
+    binary += String.fromCharCode.apply(null, slice);
+  }
+  return btoa(binary);
+}
+
+function asDataUrl(base64, mime = "image/jpeg") {
+  const clean = String(base64 || "").replace(/^data:image\/\w+;base64,/i, "");
+  return `data:${mime};base64,${clean}`;
+}
+
+async function viaCloudflare(env, englishPrompt, seed) {
+  if (!env?.AI) throw new Error("no-ai-binding");
+  const response = await env.AI.run(CF_MODEL, {
+    prompt: englishPrompt.slice(0, 2048),
+    steps: 4,
+  });
+  if (typeof response === "string" && response.length > 32) {
+    return asDataUrl(response);
+  }
+  if (response?.image) return asDataUrl(response.image, "image/jpeg");
+  if (response instanceof ArrayBuffer || response instanceof Uint8Array) {
+    return asDataUrl(bytesToBase64(response), "image/jpeg");
+  }
+  const keys = response && typeof response === "object" ? Object.keys(response).join(",") : typeof response;
+  throw new Error(`empty-cf-image:${keys}`);
+}
+
+async function viaPollinations(englishPrompt, seed) {
+  const url =
+    `${POLLINATIONS}${encodeURIComponent(englishPrompt)}` +
+    `?width=768&height=768&seed=${seed}&model=flux&private=true`;
+  const res = await fetch(url, { headers: { Accept: "image/*" } });
+  if (!res.ok) throw new Error(`pollinations-${res.status}`);
+  const buf = await res.arrayBuffer();
+  if (!buf.byteLength) throw new Error("empty-pollinations-image");
+  const mime = (res.headers.get("content-type") || "image/jpeg").split(";")[0];
+  return asDataUrl(bytesToBase64(buf), mime.startsWith("image/") ? mime : "image/jpeg");
+}
+
+function providerOrder(preferred) {
+  if (preferred === "pollinations") return ["pollinations", "cloudflare"];
+  return ["cloudflare", "pollinations"];
+}
+
+export async function buildImageResult(prompt, styleId = "auto", env, preferred = "cloudflare") {
   const clean = (prompt || "").trim();
   const style = STYLE_EN[styleId] ? styleId : "auto";
   const sceneEn = await translateZhToEn(clean);
@@ -103,17 +159,31 @@ export async function buildImageResult(prompt, styleId = "auto") {
   ].join(", ");
 
   const seed = crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000;
-  const url =
-    `${ENDPOINT}${encodeURIComponent(englishPrompt)}` +
-    `?width=768&height=768&seed=${seed}&model=flux&private=true`;
+  const errors = [];
 
-  return {
-    kind: "image",
-    url,
-    prompt: clean,
-    seed,
-    style,
-    englishPrompt,
-    altText: `这是一幅画，画的是${clean}。`,
-  };
+  for (const name of providerOrder(preferred)) {
+    try {
+      const url =
+        name === "cloudflare"
+          ? await viaCloudflare(env, englishPrompt, seed)
+          : await viaPollinations(englishPrompt, seed);
+      return {
+        kind: "image",
+        url,
+        prompt: clean,
+        seed,
+        style,
+        englishPrompt,
+        provider: name,
+        providerLabel: PROVIDER_LABEL[name],
+        altText: `这是一幅画，画的是${clean}。`,
+      };
+    } catch (err) {
+      const message = err?.message || String(err);
+      console.error("[imageGen]", name, message);
+      errors.push(`${name}:${message}`);
+    }
+  }
+
+  throw new Error(errors.join(" | ") || "image-failed");
 }

@@ -13,3 +13,7 @@ pages_build_output_dir = "web"
 binding = "DB"
 database_name = "artmind"
 database_id = "9b99f0b4-0124-4af6-9cdd-bab22d8441ba"
+
+# Workers AI：Flux Schnell 生图（env.AI）
+[ai]
+binding = "AI"
