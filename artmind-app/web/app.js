@@ -61,6 +61,11 @@ const state = {
   currentArtwork: null,
   gallery: loadGallery(),
   generating: false,
+  meditation: null, // { id, sound, remaining, paused }
+  meditationVolume: 60,
+  artBatch: 0,
+  medBatch: 0,
+  activeTask: null, // { id, ...每个互动任务自己的进度 }
 };
 
 /* ---------------- 无障碍三通道反馈 ---------------- */
@@ -73,17 +78,13 @@ function announce(text, { assertive = false, vibrate = true } = {}) {
 
   if (state.captions) setCaption(text);
 
-  // 语音合成（听障用户可关闭，视障用户核心依赖）
-  if (state.role !== "deaf" && "speechSynthesis" in window) {
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "zh-CN";
-    u.rate = 1;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
-  }
+  // 语音合成（听障用户可关闭，视障用户核心依赖）；手机兼容见 audio.js
+  if (state.role !== "deaf") window.ArtMindAudio?.speak(text);
 
   // 触觉反馈
-  if (vibrate && "vibrate" in navigator) navigator.vibrate(assertive ? [80, 40, 80] : 30);
+  if (vibrate && window.ArtMindHaptics?.enabled !== false && "vibrate" in navigator) {
+    navigator.vibrate(assertive ? [80, 40, 80] : 30);
+  }
 }
 
 function setCaption(text) {
@@ -117,6 +118,11 @@ function closePaywall() {
 
 /* ---------------- 视图切换 ---------------- */
 function switchView(view) {
+  if (view !== "gallery" && state.meditation) stopMeditation({ silent: true });
+  if (view !== "tasks") {
+    runTaskCleanup();
+    window.ArtMindAudio?.stopFx();
+  }
   state.view = view;
   document.querySelectorAll(".view").forEach((el) => (el.hidden = true));
   document.querySelectorAll(".navbtn").forEach((b) => {
@@ -494,9 +500,11 @@ function renderAIResult(kind, prompt, result) {
 
 /* ---------------- 模块二：疗愈任务 ---------------- */
 function renderTasks() {
+  runTaskCleanup();
   const el = document.getElementById("view-tasks");
   const p = D.progress;
   const isTherapist = state.role === "therapist";
+  const doneCount = state.tasks.filter((t) => t.done).length;
 
   el.innerHTML = `
     <div class="view-head">
@@ -504,9 +512,15 @@ function renderTasks() {
       <p>${isTherapist ? "你可以调整 AI 为学员推荐的任务方案。" : "AI 根据你的创作行为与情绪反馈，为你定制今日打卡。"}</p>
     </div>
 
+    ${state.activeTask ? `<section class="card task-stage" id="task-stage" aria-live="polite"></section>` : ""}
+
     <div class="grid grid-2">
       <div class="card">
-        <h3>今日任务</h3>
+        <div class="section-head">
+          <h3 style="margin:0">今日任务</h3>
+          <span class="batch-count" aria-label="今日已完成 ${doneCount} 个，共 ${state.tasks.length} 个">已完成 ${doneCount}/${state.tasks.length}</span>
+        </div>
+        <div class="progress" style="margin:8px 0 14px"><span style="width:${(doneCount / state.tasks.length) * 100}%"></span></div>
         <div id="task-list"></div>
       </div>
       <div class="card">
@@ -528,30 +542,37 @@ function renderTasks() {
 
   const list = el.querySelector("#task-list");
   list.innerHTML = state.tasks
-    .map(
-      (t) => `
-    <div class="task card ${t.pro && !isPro() ? "locked" : ""}" style="margin-bottom:10px">
-      <input type="checkbox" id="${t.id}" ${t.done ? "checked" : ""} ${t.pro && !isPro() ? "disabled" : ""}
-        aria-label="${t.title}，${t.level}，预计 ${t.minutes} 分钟" />
-      <label for="${t.id}" style="flex:1;margin:0">
-        <strong>${t.title}</strong><br />
+    .map((t) => {
+      const locked = t.pro && !isPro();
+      const active = state.activeTask?.id === t.id;
+      return `
+    <div class="task card task-item ${locked ? "locked" : ""} ${t.done ? "done" : ""} ${active ? "active" : ""}">
+      <span class="task-icon" aria-hidden="true">${t.done ? "✅" : t.icon}</span>
+      <div class="task-body">
+        <strong>${t.title}</strong>
+        <p class="task-desc">${t.desc}</p>
         <span class="tag ${t.level === "入门" ? "tag-deaf" : "tag-blind"}">${t.level}</span>
         <span style="color:var(--text-dim)"> · ${t.minutes} 分钟</span>
-        ${t.pro && !isPro() ? '<span class="lock-pill">PRO</span>' : ""}
-      </label>
-      ${isTherapist ? `<button class="btn btn-ghost" data-adjust="${t.id}" style="min-height:40px">调整</button>` : ""}
-    </div>`
-    )
+        ${locked ? '<span class="lock-pill">PRO</span>' : ""}
+      </div>
+      <div class="task-actions">
+        <button class="btn ${t.done ? "btn-ghost" : "btn-primary"}" data-start="${t.id}"
+          aria-label="${t.done ? "再玩一次" : "开始"}：${t.title}">${active ? "进行中" : t.done ? "再玩一次" : "开始"}</button>
+        ${isTherapist ? `<button class="btn btn-ghost" data-adjust="${t.id}">调整</button>` : ""}
+      </div>
+    </div>`;
+    })
     .join("");
 
-  list.querySelectorAll('input[type="checkbox"]').forEach((cb) =>
-    cb.addEventListener("change", () => {
-      const t = state.tasks.find((x) => x.id === cb.id);
-      if (t.pro && !isPro()) return;
-      t.done = cb.checked;
-      if (cb.checked) announce(`已完成任务：${t.title}。真棒，继续保持！`, { vibrate: true });
+  list.querySelectorAll("[data-start]").forEach((b) =>
+    b.addEventListener("click", () => {
+      const t = state.tasks.find((x) => x.id === b.dataset.start);
+      if (t.pro && !requirePro(`"${t.title}"为会员专享的进阶任务。`)) return;
+      startTask(t);
     })
   );
+
+  if (state.activeTask) renderTaskStage(el.querySelector("#task-stage"));
 
   list.querySelectorAll("[data-adjust]").forEach((b) =>
     b.addEventListener("click", () => {
@@ -567,12 +588,838 @@ function renderTasks() {
   );
 }
 
+/* ---------------- 互动疗愈任务 ---------------- */
+// buzz：选中时的"情绪震动签名"（毫秒：震、停、震…）
+const MOODS = [
+  { id: "yellow", color: "#FFD45C", name: "暖黄", mood: "开心", buzz: [20, 40, 20, 40, 20, 40, 40], reply: "开心的能量值得被记住，想一想今天是什么让你这么开心？" },
+  { id: "sky", color: "#7CC6FF", name: "天蓝", mood: "平静", buzz: [90], reply: "平静是很珍贵的状态，带着它去做接下来的事吧。" },
+  { id: "green", color: "#6FD39A", name: "嫩绿", mood: "放松", buzz: [40, 90, 40], reply: "身体放松下来了，记住这种舒服的感觉。" },
+  { id: "pink", color: "#FF9EC4", name: "粉色", mood: "温暖", buzz: [30, 60, 60], reply: "被温暖包围的时候，也可以把这份温暖传给别人。" },
+  { id: "purple", color: "#A88BFF", name: "淡紫", mood: "紧张", buzz: [10, 25, 10, 25, 10, 25, 10, 25, 10], reply: "有点紧张很正常，先做三次深呼吸，再把担心的事写下来。" },
+  { id: "grey", color: "#9AA3B5", name: "灰色", mood: "疲惫", buzz: [160], reply: "累了就休息一下，今天已经很努力了。" },
+  { id: "navy", color: "#3D5A9E", name: "深蓝", mood: "难过", buzz: [80, 160, 80], reply: "难过的时候不用一个人扛，可以和信任的人或疗愈师聊聊。" },
+  { id: "red", color: "#FF6B6B", name: "红色", mood: "生气", buzz: [60, 30, 60, 30, 60, 30, 90], reply: "生气说明有些事情对你很重要，先让身体动一动，把力气释放出来。" },
+];
+const WEATHERS = [
+  { id: "sunny", icon: "☀️", label: "晴天", mood: "心情很好", tip: "把这份好心情分享给一个朋友吧。" },
+  { id: "cloudy", icon: "⛅", label: "多云", mood: "有点平淡", tip: "做一件小小的、让你期待的事。" },
+  { id: "fog", icon: "🌫️", label: "有雾", mood: "迷茫、说不清", tip: "说不清也没关系，试着画下来或写一个词。" },
+  { id: "rain", icon: "🌧️", label: "小雨", mood: "有点难过", tip: "允许自己难过一会儿，也可以找信任的人聊聊。", care: true },
+  { id: "storm", icon: "⛈️", label: "雷雨", mood: "烦躁或生气", tip: "先离开让你烦躁的地方，喝口水，做五次深呼吸。", care: true },
+  { id: "rainbow", icon: "🌈", label: "雨后彩虹", mood: "刚刚变好", tip: "记住是什么让你好起来的，下次还可以再用。" },
+];
+const WEATHER_CAUSES = ["学习", "朋友", "家人", "身体", "兴趣爱好", "说不清"];
+const MELODIES = [
+  { id: "light", label: "🎈 轻快", dur: 0.26, color: "#FFB347", notes: [0, 4, 7, 12, 7, 4, 0, 4, 7, 12], reply: "轻快的旋律常常让人联想到跳动、向上的线条。" },
+  { id: "long", label: "🌙 悠长", dur: 0.7, color: "#7CC6FF", notes: [12, 11, 7, 9, 4, 5, 2, 0], reply: "悠长的旋律像慢慢流动的水，很适合用平缓的曲线表达。" },
+  { id: "jump", label: "🐸 跳跃", dur: 0.2, color: "#FF6B9E", notes: [0, 12, 2, 14, 4, 16, 7, 19, 12, 0], reply: "跳跃的旋律高低起伏，很多人会画出尖尖的折线。" },
+];
+const MELODY_SHAPES = ["〰️ 波浪", "⛰️ 山峰", "⭕ 圆圈", "📶 阶梯", "🌀 螺旋", "⚡ 闪电"];
+const SHAPE_BUZZ = {
+  "〰️ 波浪": [30, 40, 60, 40, 30, 40, 60],
+  "⛰️ 山峰": [10, 30, 25, 30, 45, 30, 70, 60, 20],
+  "⭕ 圆圈": [30, 30, 30, 30, 30, 30, 30, 30],
+  "📶 阶梯": [20, 70, 35, 70, 50, 70, 70],
+  "🌀 螺旋": [60, 120, 50, 90, 40, 60, 30, 40, 20, 25, 10],
+  "⚡ 闪电": [90, 20, 15, 20, 15, 20, 90],
+};
+const AUTO_PAINT_BUZZ = [15, 25, 25, 25, 35, 25, 50, 25, 70];
+const TRIPTYCH = [
+  {
+    label: "清晨", bg: "#FCE9DD", tip: "清晨的光是柔和的，试试浅粉、淡黄，再贴一个太阳或小鸟。",
+    colors: [{ c: "#FFB4A2", n: "浅珊瑚" }, { c: "#FFE08A", n: "淡黄" }, { c: "#9AD0FF", n: "晨空蓝" }, { c: "#FFFFFF", n: "白色" }],
+  },
+  {
+    label: "正午", bg: "#BFE6FF", tip: "正午阳光最强烈，用明亮饱和的颜色画出热闹的感觉。",
+    colors: [{ c: "#FFD23F", n: "明黄" }, { c: "#FF8C42", n: "橙色" }, { c: "#2E86DE", n: "湛蓝" }, { c: "#4CAF50", n: "草绿" }],
+  },
+  {
+    label: "夜晚", bg: "#1B1F45", tip: "夜晚安静下来了，用深蓝和紫色，再贴上月亮和星星。",
+    colors: [{ c: "#3D3B8E", n: "靛蓝" }, { c: "#8E7CC3", n: "淡紫" }, { c: "#E0E6FF", n: "银白" }, { c: "#FFD86B", n: "月光黄" }],
+  },
+];
+const STAMPS = [
+  { icon: "☀️", name: "太阳", buzz: [40, 30, 40, 30, 80] },
+  { icon: "🌙", name: "月亮", buzz: [120] },
+  { icon: "⭐", name: "星星", buzz: [8, 30, 8, 30, 8] },
+  { icon: "☁️", name: "云朵", buzz: [50, 80, 50] },
+  { icon: "🌳", name: "大树", buzz: [100, 40, 40] },
+  { icon: "🏠", name: "小房子", buzz: [35, 70, 35] },
+  { icon: "🐦", name: "小鸟", buzz: [10, 15, 10, 15, 10, 15, 10] },
+  { icon: "🌊", name: "海浪", buzz: [60, 40, 20, 40, 60] },
+];
+
+const TASK_INIT = {
+  breath: () => ({ rounds: 0, goal: 5 }),
+  mood: () => ({ mood: null, intensity: 3, word: "", strokes: 0 }),
+  weather: () => ({ step: 0, weather: null }),
+  melody: () => ({ melody: "light", listened: false, shape: null, strokes: 0 }),
+  triptych: () => ({ panel: 0, color: TRIPTYCH[0].colors[0].c, mode: "brush", stamp: "☀️", images: [null, null, null], marks: [0, 0, 0] }),
+};
+
+let taskCleanups = [];
+function onTaskCleanup(fn) { taskCleanups.push(fn); }
+function runTaskCleanup() {
+  taskCleanups.forEach((fn) => fn());
+  taskCleanups = [];
+  Haptics?.stopRhythm();
+}
+const taskStage = () => document.getElementById("task-stage");
+const sfx = (kind) => window.ArtMindAudio?.chime(kind);
+const Haptics = window.ArtMindHaptics;
+const buzz = (pattern) => Haptics?.vibrate(pattern);
+
+// 呼吸节奏：吸气时泡泡越大、震动越密越强；呼气时逐渐变疏变轻
+const INHALE_MS = 4000;
+const INHALE_PHASE = (e) => {
+  if (e > 12000) return null;
+  const p = Math.min(1, e / INHALE_MS);
+  return { interval: Math.round(650 - 520 * p), dur: Math.round(12 + 38 * p), p };
+};
+const EXHALE_PHASE = (e) => {
+  const p = e / INHALE_MS;
+  if (p >= 1) return null;
+  return { interval: Math.round(130 + 570 * p), dur: Math.round(50 - 38 * p), p: 1 - p };
+};
+const stripIcon = (label) => label.replace(/^\S+\s/, "");
+
+function startTask(t) {
+  state.activeTask = { id: t.id, finished: false, summary: "", resultHtml: "", ...TASK_INIT[t.kind]() };
+  renderTasks();
+  taskStage()?.scrollIntoView({ behavior: "smooth", block: "start" });
+  announce(`开始任务：${t.title}。${t.desc}`);
+}
+
+function closeTask() {
+  runTaskCleanup();
+  state.activeTask = null;
+  window.ArtMindAudio?.stopFx();
+  renderTasks();
+}
+
+function completeTask(summary, resultHtml = "", spoken = summary) {
+  const at = state.activeTask;
+  const t = state.tasks.find((x) => x.id === at.id);
+  t.done = true;
+  Object.assign(at, { finished: true, summary, resultHtml });
+  renderTasks();
+  sfx("done");
+  buzz([60, 40, 60, 40, 120]);
+  announce(`任务完成：${t.title}。${spoken}`, { vibrate: false });
+}
+
+function renderTaskStage(stage) {
+  runTaskCleanup();
+  const at = state.activeTask;
+  const t = state.tasks.find((x) => x.id === at.id);
+  const hapticOn = Haptics?.enabled;
+  const head = `
+    <div class="stage-head">
+      <h2><span aria-hidden="true">${t.icon}</span> ${t.title}</h2>
+      <div class="stage-head-actions">
+        <button class="btn btn-ghost" id="task-haptic" aria-pressed="${hapticOn}">📳 震动：${hapticOn ? "开" : "关"}</button>
+        <button class="btn btn-ghost" id="task-close">✕ 收起</button>
+      </div>
+    </div>
+    ${Haptics?.canVibrate ? "" : `<p class="service-note haptic-note">${Haptics?.isIOS
+      ? "iPhone 网页只支持点击时轻震一下，节奏震动已改为节拍声和泡泡闪动。"
+      : "当前浏览器不支持网页震动，已改用节拍声和画面闪动代替。"}</p>`}`;
+
+  if (at.finished) {
+    stage.innerHTML = `${head}
+      <div class="stage-done">
+        <div class="done-burst" aria-hidden="true">🎉</div>
+        <p class="done-title">完成啦！</p>
+        <p>${escapeHTML(at.summary)}</p>
+        ${at.resultHtml}
+        <div class="med-actions">
+          <button class="btn btn-primary" id="task-again">再玩一次</button>
+          <button class="btn btn-ghost" id="task-back">看看其他任务</button>
+        </div>
+      </div>`;
+    stage.querySelector("#task-again").onclick = () => startTask(t);
+    stage.querySelector("#task-back").onclick = closeTask;
+  } else {
+    stage.innerHTML = `${head}<div class="stage-body"></div>`;
+    TASK_RENDER[t.kind](stage.querySelector(".stage-body"), at);
+  }
+  stage.querySelector("#task-close").onclick = closeTask;
+  stage.querySelector("#task-haptic").onclick = () => {
+    Haptics?.setEnabled(!Haptics.enabled);
+    const btn = stage.querySelector("#task-haptic");
+    btn.textContent = `📳 震动：${Haptics.enabled ? "开" : "关"}`;
+    btn.setAttribute("aria-pressed", String(Haptics.enabled));
+    if (Haptics.enabled) buzz([30, 50, 30]);
+    announce(`震动反馈已${Haptics.enabled ? "开启" : "关闭"}。`, { vibrate: false });
+  };
+}
+
+// 手指 / 鼠标绘画画布；mode 为 "stamp" 时点击放置贴纸
+function setupPaint(canvas, { bg, color, size, mode = () => "brush", stamp = () => "⭐", stampBuzz = () => [40], onMark, restore }) {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = canvas.clientWidth || 600;
+  const h = canvas.clientHeight || 450;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+  if (restore) {
+    const img = new Image();
+    img.onload = () => ctx.drawImage(img, 0, 0, w, h);
+    img.src = restore;
+  }
+
+  const point = (e) => {
+    const r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+  const stampAt = (x, y) => {
+    ctx.font = `${Math.round(w / 9)}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(stamp(), x, y);
+    buzz(stampBuzz());
+    onMark?.();
+  };
+  let last = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    const p = point(e);
+    if (mode() === "stamp") return stampAt(p.x, p.y);
+    buzz(Haptics?.colorProfile(color()).dur + 10);
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch {}
+    last = p;
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = color();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, size() / 2, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!last) return;
+    const p = point(e);
+    Object.assign(ctx, { strokeStyle: color(), lineWidth: size(), lineCap: "round", lineJoin: "round" });
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    Haptics?.brush(Math.hypot(p.x - last.x, p.y - last.y), color(), size());
+    last = p;
+  });
+  const end = () => {
+    if (!last) return;
+    last = null;
+    ctx.globalAlpha = 1;
+    onMark?.();
+  };
+  canvas.addEventListener("pointerup", end);
+  canvas.addEventListener("pointercancel", end);
+
+  return {
+    stampRandom: () => stampAt(w * (0.15 + Math.random() * 0.7), h * (0.15 + Math.random() * 0.7)),
+    // 看不见画布的用户可以让 AI 用所选颜色铺出柔和的色块
+    autoPaint(colors) {
+      for (let i = 0; i < 16; i++) {
+        const c = colors[i % colors.length];
+        const x = Math.random() * w;
+        const y = Math.random() * h;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, 40 + Math.random() * (w / 3));
+        g.addColorStop(0, c);
+        g.addColorStop(1, `${c}00`);
+        ctx.globalAlpha = 0.6;
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, w, h);
+      }
+      ctx.globalAlpha = 1;
+      buzz(AUTO_PAINT_BUZZ);
+      onMark?.();
+    },
+    toDataURL: () => canvas.toDataURL("image/jpeg", 0.85),
+  };
+}
+
+const TASK_RENDER = {
+  breath(body, at) {
+    body.innerHTML = `
+      <p class="stage-tip">按住泡泡慢慢吸气（至少 3 秒），松开后缓缓呼气。也可以按住空格键。</p>
+      <div class="breath-wrap">
+        <button class="breath-bubble" id="bubble" aria-describedby="breath-count">
+          <span id="bubble-text">按住吸气</span>
+        </button>
+      </div>
+      <p class="breath-count" id="breath-count">已完成 <strong>${at.rounds}</strong> / ${at.goal} 次深呼吸</p>
+      <div class="breath-dots" aria-hidden="true">
+        ${Array.from({ length: at.goal }, (_, i) => `<span class="${i < at.rounds ? "on" : ""}"></span>`).join("")}
+      </div>`;
+
+    const bubble = body.querySelector("#bubble");
+    const text = body.querySelector("#bubble-text");
+    const MIN_HOLD = 3000;
+    let start = 0;
+    let ticker = null;
+    let later = null;
+    const reset = () => {
+      bubble.classList.remove("inhale", "exhale");
+      text.textContent = "按住吸气";
+    };
+    // 每一拍让泡泡边缘闪一下，听障用户和不能震动的手机也能"看见"节奏
+    const pulse = (step) => {
+      bubble.style.setProperty("--beat", (0.35 + step.p * 0.65).toFixed(2));
+      bubble.classList.remove("beat");
+      void bubble.offsetWidth;
+      bubble.classList.add("beat");
+    };
+    const playRhythm = (phase, maxMs) => {
+      Haptics?.rhythm(phase, pulse);
+      if (!Haptics?.canVibrate && Haptics?.enabled) window.ArtMindAudio?.playTaps(Haptics.schedule(phase, maxMs));
+    };
+
+    const begin = (e) => {
+      e?.preventDefault();
+      if (start || at.rounds >= at.goal) return;
+      clearTimeout(later);
+      start = Date.now();
+      bubble.classList.remove("exhale");
+      bubble.classList.add("inhale");
+      text.textContent = "吸气… 1";
+      buzz(15);
+      playRhythm(INHALE_PHASE, 8000);
+      ticker = setInterval(() => {
+        const s = Math.floor((Date.now() - start) / 1000) + 1;
+        text.textContent = s > 3 ? "可以松开了" : `吸气… ${s}`;
+      }, 250);
+    };
+
+    const finish = () => {
+      if (!start) return;
+      const held = Date.now() - start;
+      start = 0;
+      clearInterval(ticker);
+      Haptics?.stopRhythm();
+      window.ArtMindAudio?.stopFx();
+      bubble.classList.remove("inhale");
+      bubble.classList.add("exhale");
+      if (held < MIN_HOLD) {
+        text.textContent = "再久一点点";
+        buzz([30, 60, 30]);
+        announce("吸气再久一点，等泡泡变大再松开。", { vibrate: false });
+        later = setTimeout(reset, 1200);
+        return;
+      }
+      at.rounds += 1;
+      text.textContent = "慢慢呼气…";
+      body.querySelector("#breath-count strong").textContent = at.rounds;
+      body.querySelectorAll(".breath-dots span").forEach((d, i) => d.classList.toggle("on", i < at.rounds));
+      playRhythm(EXHALE_PHASE, INHALE_MS);
+      if (at.rounds >= at.goal) {
+        later = setTimeout(() => completeTask(`你完成了 ${at.goal} 次深呼吸，心跳和呼吸都慢下来了。`), 2500);
+      } else {
+        announce(`慢慢呼气……第 ${at.rounds} 次完成。`, { vibrate: false });
+        later = setTimeout(reset, 4000);
+      }
+    };
+
+    bubble.addEventListener("pointerdown", begin);
+    ["pointerup", "pointerleave", "pointercancel"].forEach((type) => bubble.addEventListener(type, finish));
+    bubble.addEventListener("contextmenu", (e) => e.preventDefault());
+    bubble.addEventListener("keydown", (e) => {
+      if ((e.key === " " || e.key === "Enter") && !e.repeat) begin(e);
+    });
+    bubble.addEventListener("keyup", (e) => {
+      if (e.key === " " || e.key === "Enter") finish();
+    });
+    onTaskCleanup(() => {
+      clearInterval(ticker);
+      clearTimeout(later);
+    });
+  },
+
+  mood(body, at) {
+    const m = MOODS.find((x) => x.id === at.mood);
+    body.innerHTML = `
+      <p class="stage-tip"><strong>第一步</strong>：选一种最像今天心情的颜色。</p>
+      <div class="mood-swatches" role="group" aria-label="心情颜色">
+        ${MOODS.map((x) => `
+          <button class="mood-swatch ${at.mood === x.id ? "selected" : ""}" data-mood="${x.id}"
+            aria-pressed="${at.mood === x.id}" style="--c:${x.color}">
+            <span class="swatch-dot" aria-hidden="true"></span>${x.name}<small>${x.mood}</small>
+          </button>`).join("")}
+      </div>
+      ${m ? `
+        <p class="stage-tip"><strong>第二步</strong>：这种感觉有多强？然后用手指在画布上涂抹它。</p>
+        <label class="med-volume">感觉强度
+          <input type="range" id="mood-intensity" min="1" max="5" value="${at.intensity}" />
+          <span id="mood-int-label">${at.intensity}</span>
+        </label>
+        <p class="haptic-hint">📳 ${m.name}的笔触手感：${Haptics?.colorProfile(m.color).feel}，强度越大震得越久。</p>
+        <canvas class="paint-canvas" id="mood-canvas" role="img" aria-label="心情画布，当前颜色${m.name}"></canvas>
+        <div class="med-actions">
+          <button class="btn btn-ghost" id="mood-auto">✨ 让 AI 帮我铺色</button>
+          <button class="btn btn-ghost" id="mood-clear">清空重画</button>
+        </div>
+        <div class="field" style="margin-top:14px">
+          <label for="mood-word"><strong>第三步</strong>（可选）：用一个词形容现在的感觉</label>
+          <input id="mood-word" maxlength="12" placeholder="例如：轻飘飘" value="${escapeHTML(at.word)}" />
+        </div>
+        <button class="btn btn-primary btn-block" id="mood-finish" ${at.strokes ? "" : "disabled"}>完成心情画</button>
+      ` : ""}`;
+
+    body.querySelectorAll("[data-mood]").forEach((b) =>
+      b.addEventListener("click", () => {
+        at.mood = b.dataset.mood;
+        at.strokes = 0;
+        const x = MOODS.find((y) => y.id === at.mood);
+        sfx("tick");
+        buzz(x.buzz);
+        renderTaskStage(taskStage());
+        announce(`你选择了${x.name}，代表${x.mood}。笔触手感是${Haptics?.colorProfile(x.color).feel}。现在可以在画布上涂抹，或者让 AI 帮你铺色。`, { vibrate: false });
+      })
+    );
+    if (!m) return;
+
+    const finishBtn = body.querySelector("#mood-finish");
+    const paint = setupPaint(body.querySelector("#mood-canvas"), {
+      bg: "#fdfbf7",
+      color: () => m.color,
+      size: () => 8 + at.intensity * 8,
+      onMark: () => {
+        at.strokes += 1;
+        finishBtn.disabled = false;
+      },
+    });
+    body.querySelector("#mood-intensity").addEventListener("input", (e) => {
+      at.intensity = Number(e.target.value);
+      body.querySelector("#mood-int-label").textContent = at.intensity;
+      buzz(at.intensity * 14);
+    });
+    body.querySelector("#mood-auto").addEventListener("click", () => {
+      paint.autoPaint([m.color, m.color, "#ffffff"]);
+      announce(`AI 已经用${m.name}铺好了画面，你可以继续涂抹，或者直接完成。`, { vibrate: false });
+    });
+    body.querySelector("#mood-clear").addEventListener("click", () => {
+      at.strokes = 0;
+      renderTaskStage(taskStage());
+    });
+    body.querySelector("#mood-word").addEventListener("input", (e) => (at.word = e.target.value.trim()));
+    finishBtn.addEventListener("click", () => {
+      const level = ["一点点", "有一些", "比较", "很", "非常"][at.intensity - 1];
+      completeTask(
+        `今天的你${level}${m.mood}${at.word ? `，像"${at.word}"一样` : ""}。${m.reply}`,
+        `<img class="task-result-img" src="${paint.toDataURL()}" alt="用${m.name}画的心情画" />`,
+      );
+    });
+  },
+
+  weather(body, at) {
+    const steps = ["选天气", "找原因"];
+    const w = WEATHERS.find((x) => x.id === at.weather);
+    body.innerHTML = `
+      <ol class="stepper">
+        ${steps.map((s, i) => `<li class="${i === at.step ? "on" : i < at.step ? "past" : ""}"><span>${i + 1}</span>${s}</li>`).join("")}
+      </ol>
+      ${at.step === 0 ? `
+        <p class="stage-tip">如果把今天的心情比作天气，它是什么样的？</p>
+        <div class="weather-grid">
+          ${WEATHERS.map((x) => `
+            <button class="weather-card" data-weather="${x.id}">
+              <span class="weather-icon" aria-hidden="true">${x.icon}</span>
+              <strong>${x.label}</strong><small>${x.mood}</small>
+            </button>`).join("")}
+        </div>` : `
+        <p class="stage-tip">${w.icon} ${w.label}——是什么让心里的天气变成这样的？</p>
+        <div class="sound-picker">
+          ${WEATHER_CAUSES.map((c) => `<button class="style-choice" data-cause="${c}">${c}</button>`).join("")}
+        </div>
+        <button class="btn btn-ghost" id="weather-prev">← 重新选天气</button>`}`;
+
+    body.querySelectorAll("[data-weather]").forEach((b) =>
+      b.addEventListener("click", () => {
+        at.weather = b.dataset.weather;
+        at.step = 1;
+        const x = WEATHERS.find((y) => y.id === at.weather);
+        sfx("tick");
+        renderTaskStage(taskStage());
+        announce(`${x.label}，${x.mood}。是什么让天气变成这样的？`, { vibrate: false });
+      })
+    );
+    body.querySelector("#weather-prev")?.addEventListener("click", () => {
+      at.step = 0;
+      renderTaskStage(taskStage());
+    });
+    body.querySelectorAll("[data-cause]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const cause = b.dataset.cause === "说不清" ? "原因暂时还说不清" : `主要和${b.dataset.cause}有关`;
+        const care = w.care ? "如果这种感觉持续很久，记得告诉信任的大人或疗愈师。" : "";
+        completeTask(
+          "这是你的今日情绪天气预报，天气会变，心情也会慢慢变好。",
+          `<div class="forecast-card">
+            <span class="weather-icon" aria-hidden="true">${w.icon}</span>
+            <div>
+              <strong>今日情绪天气：${w.label}</strong>
+              <p>${cause}。</p>
+              <p>🌱 小建议：${w.tip}</p>
+              ${care ? `<p>💛 ${care}</p>` : ""}
+            </div>
+          </div>`,
+          `今天心里是${w.label}，${cause}。小建议：${w.tip}${care}`,
+        );
+      })
+    );
+  },
+
+  melody(body, at) {
+    const current = () => MELODIES.find((x) => x.id === at.melody);
+    const bars = (mel) => mel.notes.map((n) => `<span style="height:${24 + n * 5}px;--c:${mel.color}"></span>`).join("");
+    body.innerHTML = `
+      <p class="stage-tip"><strong>第一步</strong>：选一段旋律听一听。听不到也没关系，下方的音符条会跟着旋律跳动。</p>
+      <div class="sound-picker" role="group" aria-label="旋律">
+        ${MELODIES.map((x) => `<button class="style-choice ${x.id === at.melody ? "selected" : ""}" data-melody="${x.id}" aria-pressed="${x.id === at.melody}">${x.label}</button>`).join("")}
+      </div>
+      <div class="melody-bars" id="melody-bars" aria-hidden="true">${bars(current())}</div>
+      <button class="btn btn-ghost" id="melody-play">▶ 播放旋律</button>
+      <p class="stage-tip" style="margin-top:16px"><strong>第二步</strong>：它像什么形状？选一个，或者直接在画布上画出来。</p>
+      <div class="sound-picker" role="group" aria-label="旋律的形状">
+        ${MELODY_SHAPES.map((s) => `<button class="style-choice ${at.shape === s ? "selected" : ""}" data-shape="${s}" aria-pressed="${at.shape === s}">${s}</button>`).join("")}
+      </div>
+      <p class="haptic-hint">📳 每种形状都有自己的震动：波浪起伏、山峰渐强、闪电急促……点一下就能感受。</p>
+      <canvas class="paint-canvas" id="melody-canvas" role="img" aria-label="旋律画布"></canvas>
+      <button class="btn btn-primary btn-block" id="melody-finish" style="margin-top:12px" disabled>完成旋律画</button>`;
+
+    const finishBtn = body.querySelector("#melody-finish");
+    const refresh = () => (finishBtn.disabled = !(at.listened && (at.shape || at.strokes)));
+    refresh();
+    const paint = setupPaint(body.querySelector("#melody-canvas"), {
+      bg: "#10142e",
+      color: () => current().color,
+      size: () => 10,
+      onMark: () => {
+        at.strokes += 1;
+        refresh();
+      },
+    });
+
+    let timers = [];
+    const clearTimers = () => {
+      timers.forEach(clearTimeout);
+      timers = [];
+      body.querySelectorAll("#melody-bars span").forEach((s) => s.classList.remove("on"));
+    };
+    onTaskCleanup(clearTimers);
+
+    body.querySelectorAll("[data-melody]").forEach((b) =>
+      b.addEventListener("click", () => {
+        at.melody = b.dataset.melody;
+        clearTimers();
+        body.querySelectorAll("[data-melody]").forEach((x) => {
+          const on = x.dataset.melody === at.melody;
+          x.classList.toggle("selected", on);
+          x.setAttribute("aria-pressed", String(on));
+        });
+        body.querySelector("#melody-bars").innerHTML = bars(current());
+      })
+    );
+    body.querySelector("#melody-play").addEventListener("click", () => {
+      const mel = current();
+      clearTimers();
+      window.ArtMindAudio?.playNotes(mel.notes.map((n) => ({ f: 261.63 * 2 ** (n / 12), d: mel.dur })));
+      const spans = body.querySelectorAll("#melody-bars span");
+      mel.notes.forEach((n, i) => {
+        timers.push(setTimeout(() => {
+          spans.forEach((s, j) => s.classList.toggle("on", j === i));
+          if (Haptics?.enabled && Haptics.canVibrate) navigator.vibrate(Math.max(15, Math.min(160, mel.dur * 600 - n * 6)));
+        }, i * mel.dur * 1000));
+      });
+      timers.push(setTimeout(() => spans.forEach((s) => s.classList.remove("on")), mel.notes.length * mel.dur * 1000 + 300));
+      at.listened = true;
+      refresh();
+    });
+    body.querySelectorAll("[data-shape]").forEach((b) =>
+      b.addEventListener("click", () => {
+        at.shape = b.dataset.shape;
+        body.querySelectorAll("[data-shape]").forEach((x) => {
+          const on = x.dataset.shape === at.shape;
+          x.classList.toggle("selected", on);
+          x.setAttribute("aria-pressed", String(on));
+        });
+        buzz(SHAPE_BUZZ[at.shape]);
+        if (!at.listened) announce("先播放一遍旋律，再完成任务哦。", { vibrate: false });
+        refresh();
+      })
+    );
+    finishBtn.addEventListener("click", () => {
+      const mel = current();
+      const shape = at.shape ? `想象成了"${stripIcon(at.shape)}"` : "画成了自己的线条";
+      completeTask(
+        `你把${stripIcon(mel.label)}的旋律${shape}。${mel.reply}`,
+        at.strokes ? `<img class="task-result-img" src="${paint.toDataURL()}" alt="旋律的形状画" />` : "",
+      );
+    });
+  },
+
+  triptych(body, at) {
+    const panel = TRIPTYCH[at.panel];
+    const blind = state.role === "blind";
+    body.innerHTML = `
+      <div class="triptych-tabs" role="tablist" aria-label="三联画">
+        ${TRIPTYCH.map((p, i) => `
+          <button role="tab" class="style-choice ${i === at.panel ? "selected" : ""}" data-panel="${i}" aria-selected="${i === at.panel}">
+            ${at.marks[i] ? "✅ " : ""}${i + 1}. ${p.label}
+          </button>`).join("")}
+      </div>
+      <p class="stage-tip">${panel.tip}</p>
+      <span class="field-label">颜色</span>
+      <div class="color-row" role="group" aria-label="颜色">
+        ${panel.colors.map(({ c, n }) => `
+          <button class="color-dot ${at.mode === "brush" && at.color === c ? "selected" : ""}" data-color="${c}" style="--c:${c}"
+            aria-label="画笔颜色：${n}" aria-pressed="${at.mode === "brush" && at.color === c}"></button>`).join("")}
+      </div>
+      <span class="field-label">${blind ? "贴纸（点一下就会贴到画面上）" : "贴纸（选好后点画布放上去）"}</span>
+      <div class="color-row" role="group" aria-label="贴纸">
+        ${STAMPS.map((s) => `
+          <button class="stamp-btn ${at.mode === "stamp" && at.stamp === s.icon ? "selected" : ""}" data-stamp="${s.icon}"
+            aria-label="贴纸：${s.name}">${s.icon}</button>`).join("")}
+      </div>
+      <p class="haptic-hint">📳 ${at.mode === "stamp"
+        ? `贴纸"${STAMPS.find((s) => s.icon === at.stamp)?.name}"放上去时会有专属震动。`
+        : `当前颜色手感：${Haptics?.colorProfile(at.color).feel}。`}</p>
+      <canvas class="paint-canvas" id="tri-canvas" role="img" aria-label="${panel.label}画布"></canvas>
+      <div class="med-actions">
+        <button class="btn btn-ghost" id="tri-auto">✨ AI 帮我铺底色</button>
+        <button class="btn btn-ghost" id="tri-next">${at.panel < 2 ? `下一幅：${TRIPTYCH[at.panel + 1].label} →` : "← 回到清晨"}</button>
+        <button class="btn btn-primary" id="tri-finish" ${at.marks.every(Boolean) ? "" : "disabled"}>完成三联画</button>
+      </div>`;
+
+    const paint = setupPaint(body.querySelector("#tri-canvas"), {
+      bg: panel.bg,
+      color: () => at.color,
+      size: () => 14,
+      mode: () => at.mode,
+      stamp: () => at.stamp,
+      stampBuzz: () => STAMPS.find((s) => s.icon === at.stamp)?.buzz,
+      restore: at.images[at.panel],
+      onMark: () => {
+        const first = !at.marks[at.panel];
+        at.marks[at.panel] += 1;
+        at.images[at.panel] = paint.toDataURL();
+        if (first) {
+          body.querySelector(`[data-panel="${at.panel}"]`).textContent = `✅ ${at.panel + 1}. ${panel.label}`;
+          body.querySelector("#tri-finish").disabled = !at.marks.every(Boolean);
+          sfx("good");
+        }
+      },
+    });
+
+    const goPanel = (i) => {
+      at.panel = i;
+      at.color = TRIPTYCH[i].colors[0].c;
+      at.mode = "brush";
+      buzz(Array.from({ length: i * 2 + 1 }, (_, k) => (k % 2 ? 80 : 40)));
+      renderTaskStage(taskStage());
+      announce(`第 ${i + 1} 幅：${TRIPTYCH[i].label}。${TRIPTYCH[i].tip}`, { vibrate: false });
+    };
+    body.querySelectorAll("[data-panel]").forEach((b) => b.addEventListener("click", () => goPanel(Number(b.dataset.panel))));
+    body.querySelector("#tri-next").addEventListener("click", () => goPanel((at.panel + 1) % 3));
+    body.querySelectorAll("[data-color]").forEach((b) =>
+      b.addEventListener("click", () => {
+        at.color = b.dataset.color;
+        at.mode = "brush";
+        const feel = Haptics?.colorProfile(at.color);
+        buzz(feel?.tap);
+        renderTaskStage(taskStage());
+        announce(`${b.getAttribute("aria-label").replace("画笔颜色：", "")}，手感${feel?.feel}。`, { vibrate: false });
+      })
+    );
+    body.querySelectorAll("[data-stamp]").forEach((b) =>
+      b.addEventListener("click", () => {
+        at.stamp = b.dataset.stamp;
+        const name = STAMPS.find((s) => s.icon === at.stamp)?.name;
+        if (blind) {
+          paint.stampRandom();
+          announce(`已在${panel.label}的画面上贴了一个${name}。`, { vibrate: false });
+          return;
+        }
+        at.mode = "stamp";
+        buzz(STAMPS.find((s) => s.icon === at.stamp)?.buzz);
+        body.querySelectorAll("[data-stamp]").forEach((x) => x.classList.toggle("selected", x === b));
+        body.querySelectorAll("[data-color]").forEach((x) => x.classList.remove("selected"));
+        body.querySelector(".haptic-hint").textContent = `📳 贴纸"${name}"放上去时会有专属震动。`;
+      })
+    );
+    body.querySelector("#tri-auto").addEventListener("click", () => {
+      paint.autoPaint(panel.colors.map((x) => x.c));
+      announce(`AI 已经为${panel.label}铺好了底色。`, { vibrate: false });
+    });
+    body.querySelector("#tri-finish").addEventListener("click", async () => {
+      const composite = await composeTriptych(at.images);
+      completeTask(
+        "你用三幅画记录了一天里光线和心情的变化：清晨的柔和、正午的明亮、夜晚的安静。",
+        `<img class="task-result-img" src="${composite}" alt="三联画：清晨、正午、夜晚" />
+         <a class="btn btn-ghost" href="${composite}" download="心绘-三联画.jpg">⬇ 保存三联画</a>`,
+      );
+    });
+  },
+};
+
+async function composeTriptych(images) {
+  const pw = 480, ph = 360, gap = 16, label = 44;
+  const canvas = document.createElement("canvas");
+  canvas.width = pw * 3 + gap * 4;
+  canvas.height = ph + gap * 2 + label;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#f6f1e7";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const loaded = await Promise.all(
+    images.map((src) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = src;
+    }))
+  );
+  ctx.font = '600 22px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.textAlign = "center";
+  loaded.forEach((img, i) => {
+    const x = gap + i * (pw + gap);
+    if (img) ctx.drawImage(img, x, gap, pw, ph);
+    ctx.fillStyle = "#3a3550";
+    ctx.fillText(TRIPTYCH[i].label, x + pw / 2, gap + ph + 30);
+  });
+  return canvas.toDataURL("image/jpeg", 0.88);
+}
+
 /* ---------------- 模块三：欣赏与冥想 ---------------- */
+const MEDITATION_SOUNDS = [
+  { id: "ocean", label: "🌊 海浪" },
+  { id: "rain", label: "🌧️ 雨声" },
+  { id: "forest", label: "🌲 森林" },
+  { id: "white", label: "☁️ 白噪音" },
+  { id: "none", label: "🔇 无背景音" },
+];
+const MEDITATION_CUES = [
+  "慢慢吸气，数到四……再缓缓地呼气。",
+  "感受肩膀放松下来，身体轻轻地沉进椅子里。",
+  "如果走神了也没关系，温柔地把注意力带回呼吸。",
+  "想象一种你喜欢的颜色，随着每一次呼吸慢慢铺开。",
+  "听一听身边的声音，让它像海浪一样来了又走。",
+  "继续保持平稳的呼吸，你做得很好。",
+];
+const CUE_EVERY_SEC = 40;
+let meditationTimer = null;
+
+function formatClock(sec) {
+  const s = Math.max(0, Math.round(sec));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function startMeditation(m) {
+  stopMeditation({ silent: true });
+  state.meditation = { id: m.id, sound: m.sound || "ocean", remaining: m.minutes * 60, elapsed: 0, paused: false };
+  window.ArtMindAudio?.setNoiseVolume(state.meditationVolume / 100);
+  window.ArtMindAudio?.startNoise(state.meditation.sound);
+  meditationTimer = setInterval(tickMeditation, 1000);
+  renderGallery();
+  announce(`开始冥想：${m.title}。请找到一个舒适的姿势，跟随引导，慢慢地深呼吸。`, { vibrate: true });
+}
+
+function tickMeditation() {
+  const med = state.meditation;
+  if (!med || med.paused) return;
+  med.remaining -= 1;
+  med.elapsed += 1;
+  const clock = document.getElementById("med-time");
+  if (clock) clock.textContent = formatClock(med.remaining);
+  if (med.remaining <= 0) {
+    stopMeditation();
+    return;
+  }
+  if (med.elapsed % CUE_EVERY_SEC === 0) {
+    const m = D.meditations.find((x) => x.id === med.id);
+    const cues = m?.cues?.length ? m.cues : MEDITATION_CUES;
+    const cue = cues[(med.elapsed / CUE_EVERY_SEC - 1) % cues.length];
+    announce(cue, { vibrate: state.role === "deaf" });
+  }
+}
+
+function toggleMeditationPause() {
+  const med = state.meditation;
+  if (!med) return;
+  med.paused = !med.paused;
+  if (med.paused) {
+    window.ArtMindAudio?.pauseNoise();
+    window.ArtMindAudio?.stopSpeech();
+  } else {
+    window.ArtMindAudio?.startNoise(med.sound);
+  }
+  renderGallery();
+  if (!med.paused) announce("继续冥想。", { vibrate: false });
+}
+
+function stopMeditation({ silent = false } = {}) {
+  clearInterval(meditationTimer);
+  meditationTimer = null;
+  const wasActive = !!state.meditation;
+  state.meditation = null;
+  window.ArtMindAudio?.stopNoise();
+  if (state.view === "gallery") renderGallery();
+  if (wasActive && !silent) announce("冥想结束。慢慢睁开眼睛，感受此刻的平静。");
+}
+
+function renderMeditationPlayer() {
+  const med = state.meditation;
+  if (!med) return "";
+  const m = D.meditations.find((x) => x.id === med.id);
+  const iosVolume = window.ArtMindAudio?.isIOS;
+  return `
+    <section class="card med-player ${med.paused ? "paused" : ""}" aria-labelledby="med-player-title">
+      <div class="breath-orb" aria-hidden="true"><span>跟随光圈呼吸</span></div>
+      <div class="med-player-body">
+        <h3 id="med-player-title">正在冥想：${escapeHTML(m?.title || "")}</h3>
+        <p class="med-time"><span class="sr-only">剩余时间</span><span id="med-time">${formatClock(med.remaining)}</span></p>
+        <span class="field-label" id="sound-label">背景声音</span>
+        <div class="sound-picker" role="group" aria-labelledby="sound-label">
+          ${MEDITATION_SOUNDS.map((s) => `
+            <button type="button" class="style-choice ${med.sound === s.id ? "selected" : ""}"
+              data-sound="${s.id}" aria-pressed="${med.sound === s.id}">${s.label}</button>
+          `).join("")}
+        </div>
+        ${iosVolume
+          ? `<p class="service-note">iPhone 请用侧边音量键调节背景音大小。</p>`
+          : `<label class="med-volume">背景音量
+              <input type="range" id="med-volume" min="0" max="100" value="${state.meditationVolume}" />
+            </label>`}
+        <div class="med-actions">
+          <button class="btn btn-ghost" id="med-pause">${med.paused ? "▶ 继续" : "⏸ 暂停"}</button>
+          <button class="btn btn-primary" id="med-stop">■ 结束冥想</button>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+const ART_PAGE_SIZE = 4;
+const MED_PAGE_SIZE = 3;
+const MED_TYPE_LABEL = { blind: "纯语音沉浸", deaf: "动态视觉引导", all: "通用放松" };
+
+function availableMeditations() {
+  if (state.role === "blind") return D.meditations.filter((m) => m.forRole === "blind" || m.forRole === "all");
+  if (state.role === "deaf") return D.meditations.filter((m) => m.forRole === "deaf" || m.forRole === "all");
+  return D.meditations;
+}
+
+function pageOf(list, batch, size) {
+  const pages = Math.max(1, Math.ceil(list.length / size));
+  const start = (batch % pages) * size;
+  return { items: list.slice(start, start + size), page: (batch % pages) + 1, pages };
+}
+
 function renderGallery() {
   const el = document.getElementById("view-gallery");
-  const blind = state.role === "blind";
-
-  const meds = D.meditations.filter((m) => (blind ? m.forRole === "blind" : state.role === "deaf" ? m.forRole === "deaf" : true));
+  const arts = pageOf(D.artworks, state.artBatch, ART_PAGE_SIZE);
+  const meds = pageOf(availableMeditations(), state.medBatch, MED_PAGE_SIZE);
 
   el.innerHTML = `
     <div class="view-head">
@@ -580,14 +1427,19 @@ function renderGallery() {
       <p>AI 为每幅作品提供情感、色彩、构图的深度解读；冥想课程按人群适配。</p>
     </div>
 
-    <h2 style="font-size:1.2rem">AI 智能艺术导览</h2>
+    <div class="section-head">
+      <h2>AI 智能艺术导览</h2>
+      <button class="btn btn-ghost btn-shuffle" id="art-shuffle" aria-label="换一批作品，当前第 ${arts.page} 批，共 ${arts.pages} 批">
+        🔄 换一批 <span class="batch-count">${arts.page}/${arts.pages}</span>
+      </button>
+    </div>
     <div class="grid grid-2">
-      ${D.artworks
+      ${arts.items
         .map(
           (a) => `
-        <article class="card ${a.pro && !isPro() ? "locked" : ""}">
+        <article class="card art-guide-card ${a.pro && !isPro() ? "locked" : ""}">
           ${a.pro && !isPro() ? '<span class="lock-pill">PRO 深度</span>' : ""}
-          <div style="height:120px;border-radius:12px;background:linear-gradient(135deg,#7c5cff,#2ee6c5)"></div>
+          <img class="art-guide-img" src="${a.image}" alt="${escapeHTML(a.alt || a.title)}" loading="lazy" />
           <h3 style="margin-top:12px">${a.title}</h3>
           <p>作者：${a.author}</p>
           <button class="btn btn-primary" data-art="${a.id}">🔊 AI 语音解读</button>
@@ -596,27 +1448,49 @@ function renderGallery() {
         .join("")}
     </div>
 
-    <h2 style="font-size:1.2rem;margin-top:22px">分人群冥想引导</h2>
+    <div class="section-head" style="margin-top:22px">
+      <h2>分人群冥想引导</h2>
+      <button class="btn btn-ghost btn-shuffle" id="med-shuffle" aria-label="换一批冥想课程，当前第 ${meds.page} 批，共 ${meds.pages} 批">
+        🔄 换一批 <span class="batch-count">${meds.page}/${meds.pages}</span>
+      </button>
+    </div>
+    ${renderMeditationPlayer()}
     <div class="grid grid-3">
-      ${meds
+      ${meds.items
         .map(
           (m) => `
-        <article class="card ${m.pro && !isPro() ? "locked" : ""}">
+        <article class="card med-card ${m.pro && !isPro() ? "locked" : ""}">
           ${m.pro && !isPro() ? '<span class="lock-pill">PRO</span>' : ""}
           <h3>${m.title}</h3>
-          <p>${m.forRole === "blind" ? "纯语音沉浸" : "动态视觉旋律"} · ${m.minutes} 分钟</p>
-          <button class="btn btn-ghost btn-block" data-med="${m.id}">▶ 开始冥想</button>
+          <p class="med-meta">${MED_TYPE_LABEL[m.forRole] || ""} · ${m.minutes} 分钟 · ${MEDITATION_SOUNDS.find((s) => s.id === m.sound)?.label || ""}</p>
+          ${m.desc ? `<p class="med-desc">${escapeHTML(m.desc)}</p>` : ""}
+          <button class="btn btn-ghost btn-block" data-med="${m.id}">${state.meditation?.id === m.id ? "↻ 重新开始" : "▶ 开始冥想"}</button>
         </article>`
         )
         .join("")}
     </div>
   `;
 
+  el.querySelector("#art-shuffle").addEventListener("click", () => {
+    state.artBatch += 1;
+    renderGallery();
+    const next = pageOf(D.artworks, state.artBatch, ART_PAGE_SIZE);
+    announce(`已换一批作品：${next.items.map((a) => a.title).join("、")}。`, { vibrate: false });
+    document.getElementById("art-shuffle")?.focus();
+  });
+  el.querySelector("#med-shuffle").addEventListener("click", () => {
+    state.medBatch += 1;
+    renderGallery();
+    const next = pageOf(availableMeditations(), state.medBatch, MED_PAGE_SIZE);
+    announce(`已换一批冥想课程：${next.items.map((m) => m.title).join("、")}。`, { vibrate: false });
+    document.getElementById("med-shuffle")?.focus();
+  });
+
   el.querySelectorAll("[data-art]").forEach((b) =>
     b.addEventListener("click", () => {
       const a = D.artworks.find((x) => x.id === b.dataset.art);
       if (a.pro && !requirePro("深度艺术导览为会员专享。")) return;
-      announce(`${a.title}。色彩以${a.palette.join("、")}为主。构图：${a.composition}。整体情感：${a.emotion}。`);
+      announce(`${a.title}。画面：${a.alt}色彩以${a.palette.join("、")}为主。构图：${a.composition}。整体情感：${a.emotion}。`);
     })
   );
 
@@ -624,9 +1498,25 @@ function renderGallery() {
     b.addEventListener("click", () => {
       const m = D.meditations.find((x) => x.id === b.dataset.med);
       if (m.pro && !requirePro("该冥想课程为会员专享。")) return;
-      announce(`开始冥想：${m.title}。请找到一个舒适的姿势，跟随引导，慢慢地深呼吸……`, { vibrate: true });
+      startMeditation(m);
     })
   );
+
+  el.querySelectorAll("[data-sound]").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (!state.meditation) return;
+      state.meditation.sound = b.dataset.sound;
+      if (!state.meditation.paused) window.ArtMindAudio?.startNoise(b.dataset.sound);
+      renderGallery();
+      announce(`背景声音已切换为${b.textContent.replace(/^\S+\s/, "")}。`, { vibrate: false });
+    })
+  );
+  el.querySelector("#med-volume")?.addEventListener("input", (e) => {
+    state.meditationVolume = Number(e.target.value);
+    window.ArtMindAudio?.setNoiseVolume(state.meditationVolume / 100);
+  });
+  el.querySelector("#med-pause")?.addEventListener("click", toggleMeditationPause);
+  el.querySelector("#med-stop")?.addEventListener("click", () => stopMeditation());
 }
 
 /* ---------------- 模块四：安全社区 ---------------- */
@@ -953,6 +1843,10 @@ async function init() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !document.getElementById("paywall").hidden) closePaywall();
   });
+
+  if (window.ArtMindAudio?.isMobile && !window.ArtMindAudio.unlocked) {
+    setCaption("手机上请先轻触一下屏幕，语音和背景音才能播放。");
+  }
 
   await bootstrapBackend();
   renderStudio();
