@@ -119,6 +119,7 @@ function closePaywall() {
 /* ---------------- 视图切换 ---------------- */
 function switchView(view) {
   if (view !== "gallery" && state.meditation) stopMeditation({ silent: true });
+  if (view !== "studio") cancelPromptRecording();
   if (view !== "tasks") {
     runTaskCleanup();
     window.ArtMindAudio?.stopFx();
@@ -299,40 +300,227 @@ function renderStudio() {
   }));
 }
 
+/* 语音输入：先停掉朗读（否则会占住麦克风），再录音交给服务器识别。
+   系统 SpeechRecognition 在手机、微信、非 HTTPS 下经常不可用，只作为备用。 */
+let promptRec = null;
+
+function voiceButton() {
+  return document.getElementById("voice-prompt");
+}
+
+function setVoiceButton(label, { listening = false, busy = false } = {}) {
+  const button = voiceButton();
+  if (!button) return;
+  button.textContent = label;
+  button.disabled = busy;
+  button.classList.toggle("listening", listening);
+  button.setAttribute("aria-pressed", String(listening));
+}
+
+function applyHeardPrompt(text) {
+  const input = document.getElementById("prompt");
+  if (!input || !text) return;
+  input.value = input.value.trim() ? `${input.value.trim()} ${text}` : text;
+  state.artPrompt = input.value;
+  input.dispatchEvent(new Event("input"));
+  announce(`我听到了：${text}`);
+}
+
+function pickRecorderMime() {
+  const types = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+  return types.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || "";
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function transcribeRecording(blob) {
+  const audio = await blobToDataUrl(blob);
+  const res = await fetch("/api/stt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ audio }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!data.ok || !data.text) throw new Error(data.error || "stt-failed");
+  return data.text;
+}
+
+function cancelPromptRecording() {
+  const session = promptRec;
+  promptRec = null;
+  if (!session) return;
+  clearTimeout(session.timer);
+  try { session.recognition?.abort(); } catch {}
+  if (session.recorder && session.recorder.state !== "inactive") {
+    try { session.recorder.stop(); } catch {}
+  }
+  session.stream?.getTracks().forEach((track) => track.stop());
+  setVoiceButton("🎙️ 语音输入");
+}
+
 function captureArtworkPrompt() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    announce("当前浏览器不支持语音输入，请使用 Chrome、Edge，或直接输入文字。", { assertive: true });
+  if (promptRec?.busy) return;
+  if (promptRec) {
+    finishPromptRecording();
     return;
   }
-  const button = document.getElementById("voice-prompt");
-  const input = document.getElementById("prompt");
+  window.ArtMindAudio?.stopSpeech();
+  if (!window.isSecureContext) {
+    announce("语音输入需要在安全连接下使用。请打开 https://cure.mrkings.net ，或直接打字描述画面。", { assertive: true });
+    return;
+  }
+  startPromptRecording();
+}
+
+function nativeSpeechAvailable() {
+  const ua = navigator.userAgent;
+  if (/iP(hone|ad|od)|MicroMessenger|QQ\//i.test(ua)) return false;
+  return Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
+}
+
+function startPromptRecording() {
+  // 国内访问时浏览器自带识别常因连不上 Google 而失败，优先用本机录音 + Cloudflare 识别。
+  if (navigator.mediaDevices?.getUserMedia && window.MediaRecorder) {
+    startMicPrompt();
+    return;
+  }
+  if (nativeSpeechAvailable()) {
+    startNativePrompt();
+    return;
+  }
+  announce("当前浏览器不支持录音，请直接打字描述画面。", { assertive: true });
+}
+
+function startNativePrompt() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   const recognition = new SpeechRecognition();
   recognition.lang = "zh-CN";
-  recognition.interimResults = false;
+  recognition.interimResults = true;
+  recognition.continuous = false;
   recognition.maxAlternatives = 1;
-  button.disabled = true;
-  button.textContent = "正在聆听…";
-  announce("请开始说话，我在听。");
+  let finalText = "";
+  promptRec = { recognition, timer: null, busy: false };
+  setVoiceButton("🔴 正在听… 再点结束", { listening: true });
+  setCaption("请说出你想画的内容，说完再点一下结束。");
+
   recognition.onresult = (event) => {
-    const text = event.results?.[0]?.[0]?.transcript?.trim() || "";
-    if (text) {
-      input.value = input.value ? `${input.value} ${text}` : text;
-      state.artPrompt = input.value;
-      input.dispatchEvent(new Event("input"));
-      announce(`我听到了：${text}`);
+    let interim = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const piece = event.results[i][0].transcript;
+      if (event.results[i].isFinal) finalText += piece;
+      else interim += piece;
     }
+    const live = (finalText || interim).trim();
+    if (live) setCaption(`听到：${live}`);
   };
   recognition.onerror = (event) => {
-    announce(event.error === "not-allowed"
-      ? "需要麦克风权限，请在浏览器中允许使用麦克风。"
-      : "语音输入没有成功，请再试一次或直接打字。", { assertive: true });
+    const err = event.error;
+    if (err === "aborted") return;
+    promptRec = null;
+    setVoiceButton("🎙️ 语音输入");
+    if (err === "not-allowed") {
+      announce("需要麦克风权限，请在浏览器里允许使用麦克风。", { assertive: true });
+      return;
+    }
+    if (err === "no-speech") {
+      announce("没有听到声音，请靠近麦克风再说一次，或直接打字。", { assertive: true });
+      return;
+    }
+    startMicPrompt();
   };
   recognition.onend = () => {
-    button.disabled = false;
-    button.textContent = "🎙️ 语音输入";
+    if (!promptRec || promptRec.recognition !== recognition) return;
+    promptRec = null;
+    setVoiceButton("🎙️ 语音输入");
+    const text = finalText.trim();
+    if (text) applyHeardPrompt(text);
+    else announce("没有听清，请再试一次或直接打字。", { assertive: true });
   };
-  recognition.start();
+  try {
+    recognition.start();
+    promptRec.timer = setTimeout(() => recognition.stop(), 12000);
+  } catch {
+    promptRec = null;
+    startMicPrompt();
+  }
+}
+
+async function startMicPrompt() {
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    announce("当前浏览器不支持录音，请直接打字描述画面。", { assertive: true });
+    return;
+  }
+  promptRec = { pending: true, busy: false };
+  setVoiceButton("正在打开麦克风…", { listening: true });
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    promptRec = null;
+    setVoiceButton("🎙️ 语音输入");
+    const name = err?.name || "";
+    announce(name === "NotAllowedError" || name === "SecurityError"
+      ? "需要麦克风权限。请允许使用麦克风，或在系统设置里打开麦克风。"
+      : "没有找到麦克风，请直接打字描述画面。", { assertive: true });
+    return;
+  }
+  if (!promptRec) {
+    stream.getTracks().forEach((track) => track.stop());
+    return;
+  }
+  const mime = pickRecorderMime();
+  const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+  const chunks = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data?.size) chunks.push(event.data);
+  };
+  promptRec = { stream, recorder, chunks, timer: null, busy: false };
+  recorder.start(250);
+  setVoiceButton("🔴 正在说… 再点结束", { listening: true });
+  setCaption("请说出你想画的内容，说完再点一下结束。");
+  promptRec.timer = setTimeout(() => finishPromptRecording(), 12000);
+}
+
+function finishPromptRecording() {
+  const session = promptRec;
+  if (!session || session.busy || session.pending) return;
+  if (session.recognition) {
+    try { session.recognition.stop(); } catch {}
+    return;
+  }
+  session.busy = true;
+  clearTimeout(session.timer);
+  setVoiceButton("正在识别…", { busy: true });
+  const recorder = session.recorder;
+  recorder.onstop = async () => {
+    session.stream.getTracks().forEach((track) => track.stop());
+    promptRec = null;
+    const blob = new Blob(session.chunks, { type: recorder.mimeType || "audio/webm" });
+    if (blob.size < 800) {
+      setVoiceButton("🎙️ 语音输入");
+      announce("录音太短，请再说一次，或直接打字。", { assertive: true });
+      return;
+    }
+    try {
+      applyHeardPrompt(await transcribeRecording(blob));
+    } catch {
+      announce("语音识别没有成功，请再试一次或直接打字。", { assertive: true });
+    } finally {
+      setVoiceButton("🎙️ 语音输入");
+    }
+  };
+  try { recorder.stop(); } catch {
+    session.stream.getTracks().forEach((track) => track.stop());
+    promptRec = null;
+    setVoiceButton("🎙️ 语音输入");
+  }
 }
 
 function saveCurrentArtwork() {
@@ -845,7 +1033,7 @@ function setupPaint(canvas, { bg, color, size, mode = () => "brush", stamp = () 
 const TASK_RENDER = {
   breath(body, at) {
     body.innerHTML = `
-      <p class="stage-tip">按住泡泡慢慢吸气（至少 3 秒），松开后缓缓呼气。也可以按住空格键。</p>
+      <p class="stage-tip">按住泡泡慢慢吸气，等它涨到最大、听到“可以松开了”再松开。也可以按住空格键。</p>
       <div class="breath-wrap">
         <button class="breath-bubble" id="bubble" aria-describedby="breath-count">
           <span id="bubble-text">按住吸气</span>
@@ -862,6 +1050,7 @@ const TASK_RENDER = {
     let start = 0;
     let ticker = null;
     let later = null;
+    let releaseCue = false;
     const reset = () => {
       bubble.classList.remove("inhale", "exhale");
       text.textContent = "按住吸气";
@@ -883,14 +1072,24 @@ const TASK_RENDER = {
       if (start || at.rounds >= at.goal) return;
       clearTimeout(later);
       start = Date.now();
+      releaseCue = false;
       bubble.classList.remove("exhale");
       bubble.classList.add("inhale");
       text.textContent = "吸气… 1";
       buzz(15);
       playRhythm(INHALE_PHASE, 8000);
       ticker = setInterval(() => {
-        const s = Math.floor((Date.now() - start) / 1000) + 1;
-        text.textContent = s > 3 ? "可以松开了" : `吸气… ${s}`;
+        const held = Date.now() - start;
+        const s = Math.floor(held / 1000) + 1;
+        if (held >= INHALE_MS) {
+          text.textContent = "可以松开了";
+          if (!releaseCue) {
+            releaseCue = true;
+            announce("可以松开了。", { vibrate: false });
+          }
+        } else {
+          text.textContent = `吸气… ${s}`;
+        }
       }, 250);
     };
 

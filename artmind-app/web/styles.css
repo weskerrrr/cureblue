@@ -162,6 +162,14 @@ body[data-contrast="high"] { background: #000; }
 .btn-ghost { background: transparent; color: var(--text); border-color: rgba(255,255,255,.25); }
 .btn-block { width: 100%; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.listening {
+  border-color: #ff6b6b; color: #ffb4b4;
+  animation: listen-pulse 1s ease-in-out infinite;
+}
+@keyframes listen-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,107,107,.35); }
+  50% { box-shadow: 0 0 0 8px rgba(255,107,107,0); }
+}
 
 .locked { position: relative; }
 .lock-pill {
