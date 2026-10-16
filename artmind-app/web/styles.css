@@ -569,7 +569,7 @@ body { overflow: hidden; }
 .room-dots span.on { width: 22px; background: var(--primary); }
 .deck {
   display: flex; height: 100dvh; overflow-x: auto; overflow-y: hidden;
-  scroll-snap-type: x mandatory; scroll-behavior: smooth;
+  scroll-snap-type: x mandatory; scroll-behavior: smooth; touch-action: pan-x;
   perspective: none; padding: 0;
 }
 .deck::-webkit-scrollbar { display: none; }
@@ -587,6 +587,7 @@ body { overflow: hidden; }
   box-shadow: 0 24px 50px rgba(0,0,0,.35);
 }
 .room-visual img { width: 100%; height: 100%; object-fit: cover; }
+.art-hit { touch-action: pan-x; cursor: grab; }
 .hold-mic {
   width: 168px; height: 168px; margin-top: auto; border-radius: 50%; border: 0; color: #1a1406;
   background:

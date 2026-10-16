@@ -8,7 +8,7 @@ const CF_IMAGE = "@cf/black-forest-labs/flux-1-schnell";
 const CF_TRANSLATE = "@cf/meta/m2m100-1.2b";
 
 const STYLE_EN = {
-  auto: "warm healing children's illustration, soft colors, storybook",
+  auto: "clear illustration, natural colors, the main subject is large",
   watercolor: "watercolor painting, soft washes, gentle bleeding edges",
   cartoon: "cute cartoon illustration, bright clean lines",
   crayon: "children's crayon drawing, waxy texture",
@@ -112,13 +112,21 @@ function isGoodEnglish(text) {
 function pickTranslated(response) {
   if (!response) return "";
   if (typeof response === "string") return response.trim();
+  if (typeof response.result === "string") return response.result.trim();
   return String(
     response.translated_text ||
       response.translatedText ||
+      response.translation ||
       response.result?.translated_text ||
       response.response?.translated_text ||
       "",
   ).trim();
+}
+
+function focusSubject(text) {
+  return String(text || "")
+    .replace(/^(请|帮我|给我|我想|我要|可以)?(画|生成|来)(一个|一幅|一张|一下)?/, "")
+    .trim();
 }
 
 async function viaCfTranslate(env, text) {
@@ -169,22 +177,20 @@ async function translateZhToEn(text, env) {
   if (local.complete && isGoodEnglish(local.english)) return local.english;
 
   const fromCf = await viaCfTranslate(env, text);
+  if (fromCf && local.english) return `${fromCf}, ${local.english}`;
   if (fromCf) return fromCf;
 
   const fromMemory = await viaMyMemory(text);
+  if (fromMemory && local.english) return `${fromMemory}, ${local.english}`;
   if (fromMemory) return fromMemory;
 
   if (isGoodEnglish(local.english)) return local.english;
-  return "a gentle wholesome scene matching the user's description";
+  return text;
 }
 
 function buildEnglishPrompt(sceneEn, styleEn) {
-  return [
-    `main subject: ${sceneEn}`,
-    "the picture must clearly show this main subject",
-    styleEn,
-    "storybook illustration",
-  ].join(", ");
+  const scene = String(sceneEn || "").replace(/\s+/g, " ").trim();
+  return `${scene}. The picture shows exactly this scene: ${scene}. ${styleEn}.`;
 }
 
 function bytesToBase64(buffer) {
@@ -207,7 +213,7 @@ async function viaCloudflare(env, englishPrompt) {
   if (!env?.AI) throw new Error("no-ai-binding");
   const response = await env.AI.run(CF_IMAGE, {
     prompt: englishPrompt.slice(0, 2048),
-    steps: 4,
+    steps: 8,
   });
   if (typeof response === "string" && response.length > 32) {
     return asDataUrl(response);
@@ -238,7 +244,7 @@ function providerOrder(preferred) {
 }
 
 export async function buildImageResult(prompt, styleId = "auto", env, preferred = "cloudflare") {
-  const clean = (prompt || "").trim();
+  const clean = focusSubject(prompt) || (prompt || "").trim();
   const style = STYLE_EN[styleId] ? styleId : "auto";
   const sceneEn = await translateZhToEn(clean, env);
   const englishPrompt = buildEnglishPrompt(sceneEn, STYLE_EN[style]);

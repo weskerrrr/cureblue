@@ -2,10 +2,8 @@
 // body: { capability: "speech2image"|"desc2music"|"visualize"|"lipread"|"artguide", prompt }
 // 生图优先 Cloudflare Workers AI，失败回退 Pollinations；其余能力保留结构化演示结果。
 import { json, error, preflight, getUser, uuid } from "../_lib/response.js";
-import { ensureUser, getEntitlements, getDailyUsage, incrDailyUsage, logAiInvocation } from "../_lib/db.js";
+import { ensureUser, logAiInvocation } from "../_lib/db.js";
 import { buildImageResult } from "../_lib/imageGen.js";
-
-const PRO_ONLY = new Set(["lipread"]);
 
 export async function onRequestOptions() {
   return preflight();
@@ -20,21 +18,6 @@ export async function onRequestPost({ request, env }) {
   if (String(prompt).length > 300) return error("画面描述不能超过 300 个字符");
 
   await ensureUser(env.DB, id, role);
-  const ent = await getEntitlements(env.DB, id);
-  const isPro = ent.ai_unlimited === 1;
-
-  // PRO 专属能力
-  if (PRO_ONLY.has(capability) && !isPro) {
-    return json({ ok: false, code: "PRO_REQUIRED", error: "该能力为会员专享。" }, 402);
-  }
-
-  // 免费额度校验（服务端权威）；成功生成后再扣次，避免接口抖动白白扣额度
-  if (!isPro) {
-    const used = await getDailyUsage(env.DB, id);
-    if (used >= ent.ai_daily_quota) {
-      return json({ ok: false, code: "FREE_QUOTA_EXCEEDED", error: "今日免费次数已用完。" }, 402);
-    }
-  }
 
   let result;
   try {
@@ -43,12 +26,8 @@ export async function onRequestPost({ request, env }) {
     return json({ ok: false, error: "生图服务暂时不可用，请换一个接口或稍后重试。" }, 502);
   }
 
-  if (!isPro) await incrDailyUsage(env.DB, id);
   await logAiInvocation(env.DB, id, capability, true, Date.now() - t0);
-
-  const used = isPro ? -1 : await getDailyUsage(env.DB, id);
-  const quotaLeft = isPro ? -1 : Math.max(0, ent.ai_daily_quota - used);
-  return json({ ok: true, capability, result, aiQuotaLeft: quotaLeft });
+  return json({ ok: true, capability, result, aiQuotaLeft: -1 });
 }
 
 async function generate(capability, prompt, options = {}, env) {

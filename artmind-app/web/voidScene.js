@@ -1,7 +1,7 @@
 import * as THREE from "./vendor/three.module.min.js";
 
 /* 整页的混沌空间。按钮仍负责触摸，这里只负责看见。 */
-const ROOMS = ["studio", "tasks", "gallery", "community", "subscribe"];
+const ROOMS = ["studio", "tasks", "gallery", "community"];
 const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const scene = new THREE.Scene();
@@ -246,13 +246,6 @@ function makeForms() {
   }
   forms.community = cluster;
 
-  const halo = new THREE.Mesh(
-    new THREE.TorusGeometry(0.78, 0.028, 16, 80),
-    new THREE.MeshBasicMaterial({ color: 0xe7c27a }),
-  );
-  halo.rotation.x = Math.PI / 2.6;
-  forms.subscribe = halo;
-
   ROOMS.forEach((id) => rig.add(forms[id]));
 }
 
@@ -318,7 +311,6 @@ function tick(now) {
   forms.tasks.scale.setScalar((0.9 + breath * 0.12) * (0.84 + weights.tasks * 0.16));
   forms.gallery.rotation.y = Math.sin(clock * 0.35) * 0.18;
   forms.community.rotation.y = clock * 0.2;
-  forms.subscribe.rotation.z = clock * 0.15;
   if (reduced) camera.position.copy(camDesired);
   else camera.position.lerp(camDesired, 0.05);
   camera.lookAt(0, 0.05, 0);

@@ -2,7 +2,7 @@
 window.ArtMindImage = (() => {
   const ENDPOINT = "https://image.pollinations.ai/prompt/";
   const STYLE_EN = {
-    auto: "warm healing children's illustration, soft colors, storybook",
+    auto: "clear illustration, natural colors, the main subject is large",
     watercolor: "watercolor painting, soft washes, gentle bleeding edges",
     cartoon: "cute cartoon illustration, bright clean lines",
     crayon: "children's crayon drawing, waxy texture",
@@ -116,19 +116,15 @@ window.ArtMindImage = (() => {
     } finally {
       clearTimeout(timer);
     }
-    return isGoodEnglish(local.english) ? local.english : "a gentle wholesome scene matching the user's description";
+    return isGoodEnglish(local.english) ? local.english : text;
   }
 
   async function build({ prompt, style = "auto" }) {
     const clean = (prompt || "").trim();
     const styleId = STYLE_EN[style] ? style : "auto";
     const sceneEn = await translateZhToEn(clean);
-    const englishPrompt = [
-      `main subject: ${sceneEn}`,
-      "the picture must clearly show this main subject",
-      STYLE_EN[styleId],
-      "storybook illustration",
-    ].join(", ");
+    const scene = String(sceneEn || "").replace(/\s+/g, " ").trim();
+    const englishPrompt = `${scene}. The picture shows exactly this scene: ${scene}. ${STYLE_EN[styleId]}.`;
     const seed = Math.floor(Math.random() * 1_000_000);
     const url =
       `${ENDPOINT}${encodeURIComponent(englishPrompt)}` +

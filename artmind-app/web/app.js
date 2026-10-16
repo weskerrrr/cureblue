@@ -65,6 +65,7 @@ const state = {
   meditationVolume: 60,
   artBatch: 0,
   medBatch: 0,
+  taskIndex: 0,
   activeTask: null, // { id, ...每个互动任务自己的进度 }
 };
 
@@ -92,11 +93,10 @@ function announce(text, { assertive = false, vibrate = true } = {}) {
 }
 
 const PLACES = {
-  studio: { n: 1, name: "创作", next: "疗愈", say: "创作。按住屏幕中间的麦克风，说出你想画的画面，松开手指就开始画。向左滑，去疗愈。" },
-  tasks: { n: 2, name: "疗愈", next: "欣赏", say: "疗愈。点中间的圆，开始今天的练习。向左滑，去欣赏。" },
-  gallery: { n: 3, name: "欣赏", next: "社区", say: "欣赏。点金色的圆，听这幅画。按住这个圆，开始冥想。向左滑，去社区。" },
-  community: { n: 4, name: "社区", next: "会员", say: "社区。点一下，听一条动态。按住中间，说出你想分享的话，松开就发布。向左滑，去会员。" },
-  subscribe: { n: 5, name: "会员", next: "创作", say: "会员。点中间，听免费和会员的区别。再点一次，开通月度会员。向右滑可以回去。" },
+  studio: { n: 1, name: "创作", next: "疗愈", say: "创作。按住屏幕中间的麦克风，说出你想画的画面，松开手指就开始画。向左滑，去疗愈。向右滑，去社区。" },
+  tasks: { n: 2, name: "疗愈", next: "欣赏", say: "疗愈。上下滑动换一个练习，点中间开始。向左滑，去欣赏。" },
+  gallery: { n: 3, name: "欣赏", next: "社区", say: "欣赏。上下滑动画面，会换一幅画，并念出解说。向左滑，去社区。" },
+  community: { n: 4, name: "社区", next: "创作", say: "社区。点一下，听一条动态。按住中间，说出你想分享的话，松开就发布。向左滑，回到创作。" },
 };
 let speakGlow = null;
 let welcomed = false;
@@ -123,14 +123,12 @@ function setCaption(text) {
 
 /* ---------------- Freemium 功能墙 ---------------- */
 function isPro() {
-  return state.plan === "monthly" || state.plan === "yearly";
+  return true;
 }
 
 // 统一拦截入口：返回 true 表示有权限，false 表示已弹出 Paywall
-function requirePro(featureDesc) {
-  if (isPro()) return true;
-  openPaywall(featureDesc);
-  return false;
+function requirePro() {
+  return true;
 }
 
 function openPaywall(desc) {
@@ -147,10 +145,10 @@ function closePaywall() {
 }
 
 /* ---------------- 视图切换 ---------------- */
-const ROOMS = ["studio", "tasks", "gallery", "community", "subscribe"];
+const ROOMS = ["studio", "tasks", "gallery", "community"];
+const TRACK = ["community", "studio", "tasks", "gallery", "community", "studio"];
 
 function spokenDestination(text) {
-  if (/会员|订阅/.test(text)) return "subscribe";
   if (/社区/.test(text)) return "community";
   if (/冥想|欣赏/.test(text)) return "gallery";
   if (/任务|练习|疗愈/.test(text)) return "tasks";
@@ -177,17 +175,22 @@ function updateRoomChrome() {
   if (line && place) line.textContent = place.say;
 }
 
-function scrollToRoom(view) {
-  const deck = document.getElementById("main");
-  const index = ROOMS.indexOf(view);
-  if (!deck || index < 0) return;
-  deck.scrollTo({ left: index * deck.clientWidth, behavior: "smooth" });
+function trackIndex(view) {
+  if (view === "community") return 4;
+  if (view === "studio") return 1;
+  return Math.max(0, TRACK.indexOf(view));
 }
 
-function switchView(view) {
-  if (!ROOMS.includes(view) || view === state.view && document.getElementById("view-" + view)?.childElementCount) {
-    if (view === state.view) return;
-  }
+function scrollToRoom(view, behavior = "smooth") {
+  const deck = document.getElementById("main");
+  const index = trackIndex(view);
+  if (!deck || index < 0) return;
+  deck.scrollTo({ left: index * deck.clientWidth, behavior });
+}
+
+function switchView(view, { scroll = true } = {}) {
+  if (!ROOMS.includes(view)) return;
+  if (view === state.view && document.getElementById("view-" + view)?.childElementCount) return;
   if (view !== "gallery" && state.meditation) stopMeditation({ silent: true });
   if (view !== "studio") cancelPromptRecording();
   if (view !== "tasks") {
@@ -198,35 +201,102 @@ function switchView(view) {
   window.ArtMindVoid?.setRoom(view);
   renderView(view);
   updateRoomChrome();
-  scrollToRoom(view);
+  if (scroll) scrollToRoom(view);
   orient(view);
+  syncClones();
+}
+
+function syncClones() {
+  const studio = document.getElementById("view-studio");
+  const community = document.getElementById("view-community");
+  const before = document.getElementById("clone-before");
+  const after = document.getElementById("clone-after");
+  const mirror = (from, to) => {
+    if (!from || !to) return;
+    to.innerHTML = from.innerHTML;
+    to.querySelectorAll("[id]").forEach((node) => node.removeAttribute("id"));
+  };
+  mirror(community, before);
+  mirror(studio, after);
 }
 
 function bindDeck() {
   const deck = document.getElementById("main");
   if (!deck) return;
-  let passed = 0;
+  let passed = 1;
   let settleTimer = null;
+  let jumping = false;
   const indexNow = () => Math.round(deck.scrollLeft / Math.max(1, deck.clientWidth));
   deck.addEventListener("scroll", () => {
-    const index = indexNow();
-    if (index !== passed && ROOMS[index]) {
+    if (jumping) return;
+    const index = Math.max(0, Math.min(TRACK.length - 1, indexNow()));
+    if (index !== passed && TRACK[index]) {
       passed = index;
-      const name = PLACES[ROOMS[index]].name;
-      window.ArtMindVoid?.setRoom(ROOMS[index]);
+      const name = PLACES[TRACK[index]].name;
+      window.ArtMindVoid?.setRoom(TRACK[index]);
       setCaption(name);
       if (state.role !== "deaf") window.ArtMindAudio?.speak(name);
     }
     clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
-      const view = ROOMS[indexNow()];
-      if (view && view !== state.view) switchView(view);
+      const index = Math.max(0, Math.min(TRACK.length - 1, indexNow()));
+      if (index === 0 || index === TRACK.length - 1) {
+        const view = index === 0 ? "community" : "studio";
+        const dest = trackIndex(view);
+        jumping = true;
+        deck.style.scrollBehavior = "auto";
+        deck.style.scrollSnapType = "none";
+        deck.scrollLeft = dest * deck.clientWidth;
+        passed = dest;
+        requestAnimationFrame(() => {
+          deck.style.scrollBehavior = "";
+          deck.style.scrollSnapType = "";
+          jumping = false;
+        });
+        if (view !== state.view) switchView(view, { scroll: false });
+        return;
+      }
+      const view = TRACK[index];
+      if (view && view !== state.view) switchView(view, { scroll: false });
     }, 140);
   }, { passive: true });
 }
 
+function bindVerticalCycle(el, onDelta) {
+  if (!el) return;
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+  el.addEventListener("pointerdown", (event) => {
+    if (event.target.closest(".paint-canvas, input, textarea, select")) {
+      tracking = false;
+      return;
+    }
+    tracking = true;
+    startX = event.clientX;
+    startY = event.clientY;
+  });
+  el.addEventListener("pointerup", (event) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    if (Math.abs(dy) < 56 || Math.abs(dy) < Math.abs(dx) * 1.2) return;
+    const button = event.target.closest("button");
+    if (button) {
+      const stop = (click) => {
+        click.preventDefault();
+        click.stopPropagation();
+      };
+      button.addEventListener("click", stop, { capture: true, once: true });
+    }
+    onDelta(dy < 0 ? 1 : -1);
+  });
+  el.addEventListener("pointercancel", () => { tracking = false; });
+}
+
 function renderView(view) {
-  const map = { studio: renderStudio, tasks: renderTasks, gallery: renderGallery, community: renderCommunity, subscribe: renderSubscribe };
+  const map = { studio: renderStudio, tasks: renderTasks, gallery: renderGallery, community: renderCommunity };
   map[view]?.();
 }
 
@@ -338,9 +408,24 @@ function renderStudioRoom() {
   });
 }
 
+function currentTask() {
+  const list = state.tasks;
+  state.taskIndex = ((state.taskIndex || 0) % list.length + list.length) % list.length;
+  return list[state.taskIndex];
+}
+
+function stepTask(delta) {
+  runTaskCleanup();
+  state.activeTask = null;
+  state.taskIndex += delta;
+  const task = currentTask();
+  renderTaskLobby();
+  announce(`${task.title}。${task.desc}。点中间开始。`);
+}
+
 function renderTaskLobby() {
   const el = document.getElementById("view-tasks");
-  const next = state.tasks.find((task) => !task.done && (!task.pro || isPro())) || state.tasks[0];
+  const next = currentTask();
   el.innerHTML = `
     <div class="room-stage">
       <p class="room-kicker">疗愈</p>
@@ -350,12 +435,23 @@ function renderTaskLobby() {
         <strong>开始</strong>
         <small>${next.minutes} 分钟</small>
       </button>
-      <p class="room-hint">向左滑，去欣赏</p>
+      <p class="room-hint">上下滑动换练习 · 向左滑去欣赏</p>
     </div>`;
   el.querySelector("#task-go").addEventListener("click", () => {
-    if (next.pro && !requirePro(`"${next.title}"为会员练习。`)) return;
     startTask(next);
   });
+}
+
+function narrateArtwork(art) {
+  announce(`${art.title}。作者${art.author}。画面：${art.alt}色彩以${art.palette.join("、")}为主。构图：${art.composition}。情感：${art.emotion}。`, { vibrate: false });
+}
+
+function stepArt(delta) {
+  if (state.meditation) stopMeditation({ silent: true });
+  const arts = D.artworks;
+  state.artIndex = ((state.artIndex || 0) + delta + arts.length) % arts.length;
+  renderGalleryRoom();
+  narrateArtwork(arts[state.artIndex]);
 }
 
 function renderGalleryRoom() {
@@ -363,46 +459,15 @@ function renderGalleryRoom() {
   const arts = D.artworks;
   state.artIndex = ((state.artIndex || 0) % arts.length + arts.length) % arts.length;
   const art = arts[state.artIndex];
-  const med = availableMeditations().find((item) => !item.pro || isPro()) || availableMeditations()[0];
   el.innerHTML = `
     <div class="room-stage">
       <p class="room-kicker">欣赏 · ${state.artIndex + 1} / ${arts.length}</p>
       <h1>${escapeHTML(art.title)}</h1>
-      <button type="button" class="room-visual art-hit" id="art-next" aria-label="换下一幅画">
+      <div class="room-visual art-hit" id="art-stage" aria-label="${escapeHTML(art.title)}，上下滑动换一幅">
         <img src="${art.image}" alt="${escapeHTML(art.alt)}" />
-      </button>
-      <button type="button" class="hold-mic" id="hear-art">
-        <strong>听这幅画</strong>
-        <small>按住则开始冥想</small>
-      </button>
-      <p class="room-hint">点画面换一幅 · 向左滑去社区</p>
+      </div>
+      <p class="room-hint">上下滑动换一幅，并听解说</p>
     </div>`;
-  el.querySelector("#art-next").addEventListener("click", () => {
-    state.artIndex += 1;
-    renderGalleryRoom();
-    const next = D.artworks[state.artIndex % D.artworks.length];
-    announce(`${next.title}。点金色的圆听这幅画。`, { vibrate: false });
-  });
-  const hear = el.querySelector("#hear-art");
-  let timer = null;
-  let held = false;
-  hear.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    held = false;
-    timer = setTimeout(() => {
-      held = true;
-      if (med.pro && !requirePro("该冥想为会员专享。")) return;
-      startMeditation(med);
-    }, 420);
-  });
-  const up = () => {
-    clearTimeout(timer);
-    if (held) return;
-    if (art.pro && !requirePro("这幅深度导览为会员专享。")) return;
-    announce(`${art.title}。作者${art.author}。画面：${art.alt}色彩以${art.palette.join("、")}为主。构图：${art.composition}。情感：${art.emotion}。`);
-  };
-  hear.addEventListener("pointerup", up);
-  hear.addEventListener("pointercancel", () => clearTimeout(timer));
 }
 
 function renderGalleryFocus() {
@@ -463,7 +528,7 @@ function renderCommunityRoom() {
         <strong>${state.role === "parent" ? "听一条" : "听 / 说"}</strong>
         <small>${state.role === "parent" ? "下一条" : "点一下听，按住说"}</small>
       </button>
-      <p class="room-hint">向左滑，去会员</p>
+      <p class="room-hint">向左滑，回到创作</p>
     </div>`;
   const button = el.querySelector("#community-go");
   let timer = null;
@@ -2372,7 +2437,6 @@ function handleVoiceCommand(text) {
     { kw: ["任务", "打卡"], view: "tasks" },
     { kw: ["欣赏", "冥想"], view: "gallery" },
     { kw: ["社区"], view: "community" },
-    { kw: ["订阅", "会员"], view: "subscribe" },
   ];
   for (const n of nav) {
     if (n.kw.some((k) => text.includes(k)) && text.length < 8) {
@@ -2447,10 +2511,7 @@ async function init() {
   document.getElementById("btn-voice").addEventListener("click", toggleVoice);
   document.getElementById("role-select").addEventListener("change", (e) => changeRole(e.target.value));
 
-  document.getElementById("paywall-go").addEventListener("click", () => {
-    closePaywall();
-    switchView("subscribe");
-  });
+  document.getElementById("paywall-go").addEventListener("click", closePaywall);
   document.getElementById("paywall-close").addEventListener("click", closePaywall);
   document.getElementById("btn-replay")?.addEventListener("click", () => orient(state.view));
   document.body.dataset.role = state.role;
@@ -2459,7 +2520,21 @@ async function init() {
   });
   window.ArtMindVoid?.start();
   window.ArtMindVoid?.setRoom("studio");
+  const deck = document.getElementById("main");
+  if (deck) {
+    deck.style.scrollBehavior = "auto";
+    deck.scrollLeft = deck.clientWidth || window.innerWidth;
+    deck.style.scrollBehavior = "";
+  }
   bindDeck();
+  bindVerticalCycle(document.getElementById("view-tasks"), (delta) => {
+    if (state.view !== "tasks") return;
+    stepTask(delta);
+  });
+  bindVerticalCycle(document.getElementById("view-gallery"), (delta) => {
+    if (state.view !== "gallery") return;
+    stepArt(delta);
+  });
 
   if (window.ArtMindAudio?.isMobile && !window.ArtMindAudio.unlocked) {
     setCaption("手机上请先轻触一下屏幕，语音和背景音才能播放。");
@@ -2467,6 +2542,12 @@ async function init() {
 
   await bootstrapBackend();
   ROOMS.forEach((view) => renderView(view));
+  syncClones();
+  if (deck) {
+    deck.style.scrollBehavior = "auto";
+    deck.scrollLeft = deck.clientWidth;
+    deck.style.scrollBehavior = "";
+  }
   state.view = "studio";
   updateRoomChrome();
   orient("studio");
