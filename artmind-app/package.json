@@ -12,6 +12,7 @@
     "deploy": "wrangler pages deploy web --project-name=cureblue"
   },
   "devDependencies": {
+    "three": "^0.170.0",
     "wrangler": "^3.90.0"
   }
 }

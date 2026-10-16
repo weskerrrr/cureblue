@@ -85,6 +85,36 @@ function announce(text, { assertive = false, vibrate = true } = {}) {
   if (vibrate && window.ArtMindHaptics?.enabled !== false && "vibrate" in navigator) {
     navigator.vibrate(assertive ? [80, 40, 80] : 30);
   }
+
+  document.body.classList.add("is-speaking");
+  clearTimeout(speakGlow);
+  speakGlow = setTimeout(() => document.body.classList.remove("is-speaking"), Math.min(9000, 800 + String(text).length * 160));
+}
+
+const PLACES = {
+  studio: { n: 1, name: "创作", next: "疗愈", say: "创作。按住屏幕中间的麦克风，说出你想画的画面，松开手指就开始画。向左滑，去疗愈。" },
+  tasks: { n: 2, name: "疗愈", next: "欣赏", say: "疗愈。点中间的圆，开始今天的练习。向左滑，去欣赏。" },
+  gallery: { n: 3, name: "欣赏", next: "社区", say: "欣赏。点金色的圆，听这幅画。按住这个圆，开始冥想。向左滑，去社区。" },
+  community: { n: 4, name: "社区", next: "会员", say: "社区。点一下，听一条动态。按住中间，说出你想分享的话，松开就发布。向左滑，去会员。" },
+  subscribe: { n: 5, name: "会员", next: "创作", say: "会员。点中间，听免费和会员的区别。再点一次，开通月度会员。向右滑可以回去。" },
+};
+let speakGlow = null;
+let welcomed = false;
+
+function orient(view, { speak = true } = {}) {
+  const place = PLACES[view] || PLACES.studio;
+  const kicker = document.getElementById("now-kicker");
+  const line = document.getElementById("now-line");
+  if (kicker) kicker.textContent = place.name;
+  if (line) line.textContent = place.say;
+  document.body.dataset.place = view;
+  if (!speak) return;
+  const first = state.role === "blind" && !welcomed;
+  welcomed = true;
+  const text = first
+    ? `欢迎来到心绘。左右滑动换房间。滑到哪一间，会先报名字。${place.say}`
+    : place.say;
+  announce(text);
 }
 
 function setCaption(text) {
@@ -117,7 +147,47 @@ function closePaywall() {
 }
 
 /* ---------------- 视图切换 ---------------- */
+const ROOMS = ["studio", "tasks", "gallery", "community", "subscribe"];
+
+function spokenDestination(text) {
+  if (/会员|订阅/.test(text)) return "subscribe";
+  if (/社区/.test(text)) return "community";
+  if (/冥想|欣赏/.test(text)) return "gallery";
+  if (/任务|练习|疗愈/.test(text)) return "tasks";
+  if (/去创作|打开创作|创作工坊/.test(text)) return "studio";
+  return "";
+}
+
+function updateRoomChrome() {
+  const i = Math.max(0, ROOMS.indexOf(state.view));
+  const dots = document.getElementById("room-dots");
+  if (dots) {
+    dots.innerHTML = ROOMS.map((id, index) => `<span class="${index === i ? "on" : ""}"></span>`).join("");
+  }
+  const prev = PLACES[ROOMS[(i + ROOMS.length - 1) % ROOMS.length]];
+  const next = PLACES[ROOMS[(i + 1) % ROOMS.length]];
+  const left = document.getElementById("peek-left");
+  const right = document.getElementById("peek-right");
+  if (left) left.textContent = prev.name;
+  if (right) right.textContent = next.name;
+  const place = PLACES[state.view];
+  const kicker = document.getElementById("now-kicker");
+  const line = document.getElementById("now-line");
+  if (kicker && place) kicker.textContent = place.name;
+  if (line && place) line.textContent = place.say;
+}
+
+function scrollToRoom(view) {
+  const deck = document.getElementById("main");
+  const index = ROOMS.indexOf(view);
+  if (!deck || index < 0) return;
+  deck.scrollTo({ left: index * deck.clientWidth, behavior: "smooth" });
+}
+
 function switchView(view) {
+  if (!ROOMS.includes(view) || view === state.view && document.getElementById("view-" + view)?.childElementCount) {
+    if (view === state.view) return;
+  }
   if (view !== "gallery" && state.meditation) stopMeditation({ silent: true });
   if (view !== "studio") cancelPromptRecording();
   if (view !== "tasks") {
@@ -125,18 +195,34 @@ function switchView(view) {
     window.ArtMindAudio?.stopFx();
   }
   state.view = view;
-  document.querySelectorAll(".view").forEach((el) => (el.hidden = true));
-  document.querySelectorAll(".navbtn").forEach((b) => {
-    const on = b.dataset.view === view;
-    b.classList.toggle("active", on);
-    b.setAttribute("aria-selected", String(on));
-  });
-  const panel = document.getElementById("view-" + view);
-  panel.hidden = false;
+  window.ArtMindVoid?.setRoom(view);
   renderView(view);
-  document.getElementById("main").focus();
-  const labels = { studio: "创作工坊", tasks: "疗愈任务", gallery: "欣赏与冥想", community: "安全社区", subscribe: "订阅会员" };
-  announce("已打开" + labels[view]);
+  updateRoomChrome();
+  scrollToRoom(view);
+  orient(view);
+}
+
+function bindDeck() {
+  const deck = document.getElementById("main");
+  if (!deck) return;
+  let passed = 0;
+  let settleTimer = null;
+  const indexNow = () => Math.round(deck.scrollLeft / Math.max(1, deck.clientWidth));
+  deck.addEventListener("scroll", () => {
+    const index = indexNow();
+    if (index !== passed && ROOMS[index]) {
+      passed = index;
+      const name = PLACES[ROOMS[index]].name;
+      window.ArtMindVoid?.setRoom(ROOMS[index]);
+      setCaption(name);
+      if (state.role !== "deaf") window.ArtMindAudio?.speak(name);
+    }
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      const view = ROOMS[indexNow()];
+      if (view && view !== state.view) switchView(view);
+    }, 140);
+  }, { passive: true });
 }
 
 function renderView(view) {
@@ -144,8 +230,312 @@ function renderView(view) {
   map[view]?.();
 }
 
+/* ---------------- 手机房间 ---------------- */
+function releaseHoldRecording() {
+  return new Promise((resolve) => {
+    const session = promptRec;
+    if (!session || session.pending || !session.recorder) {
+      if (session?.pending) promptRec = null;
+      resolve("");
+      return;
+    }
+    session.busy = true;
+    clearTimeout(session.timer);
+    const recorder = session.recorder;
+    recorder.onstop = async () => {
+      session.stream.getTracks().forEach((track) => track.stop());
+      promptRec = null;
+      const blob = new Blob(session.chunks, { type: recorder.mimeType || "audio/webm" });
+      if (blob.size < 800) {
+        announce("按住的时间太短，请再说长一点。", { assertive: true });
+        resolve("");
+        return;
+      }
+      try {
+        resolve(await transcribeRecording(blob));
+      } catch {
+        announce("没有识别出来，请再按住说一次。", { assertive: true });
+        resolve("");
+      }
+    };
+    try { recorder.stop(); } catch {
+      promptRec = null;
+      resolve("");
+    }
+  });
+}
+
+function bindHoldMic(button, onText) {
+  let holding = false;
+  const start = async (event) => {
+    if (holding || button.disabled) return;
+    holding = true;
+    event.preventDefault();
+    try { button.setPointerCapture(event.pointerId); } catch {}
+    button.classList.add("holding");
+    window.ArtMindVoid?.setHolding(true);
+    const deck = document.getElementById("main");
+    if (deck) deck.style.overflowX = "hidden";
+    window.ArtMindAudio?.stopSpeech();
+    setCaption("正在听。说完松开。");
+    buzz(18);
+    await startMicPrompt();
+  };
+  const end = async () => {
+    if (!holding) return;
+    holding = false;
+    button.classList.remove("holding");
+    window.ArtMindVoid?.setHolding(false);
+    const deck = document.getElementById("main");
+    if (deck) deck.style.overflowX = "";
+    const text = (await releaseHoldRecording()).trim();
+    if (text) onText(text);
+  };
+  button.addEventListener("pointerdown", start);
+  button.addEventListener("pointerup", end);
+  button.addEventListener("pointercancel", end);
+}
+
+function renderStudioRoom() {
+  const el = document.getElementById("view-studio");
+  const art = state.currentArtwork;
+  el.innerHTML = `
+    <div class="room-stage">
+      <p class="room-kicker">创作</p>
+      <h1>${state.generating ? "正在作画" : "按住说，松开就画"}</h1>
+      <div class="room-visual" id="canvas" role="region" aria-label="${art ? escapeHTML(art.prompt) : "还没有画"}">
+        ${state.generating
+          ? `<div class="art-loading"><span class="art-spinner" aria-hidden="true"></span><strong>正在画</strong></div>`
+          : art
+            ? `<img src="${art.url}" alt="${escapeHTML(art.altText || art.prompt)}" />`
+            : `<p class="room-empty">松开之后，画会出现在这里</p>`}
+      </div>
+      <textarea id="prompt" class="sr-only">${escapeHTML(state.artPrompt)}</textarea>
+      <button type="button" class="hold-mic" id="hold-mic" ${state.generating ? "disabled" : ""}>
+        <strong>${state.generating ? "请稍候" : "麦克风"}</strong>
+        <small>${state.generating ? "正在画" : "按住说话"}</small>
+      </button>
+      <p class="room-hint">向左滑，去疗愈</p>
+    </div>`;
+  const mic = el.querySelector("#hold-mic");
+  window.ArtMindVoid?.setBusy(state.generating);
+  window.ArtMindVoid?.setHolding(false);
+  if (!mic || state.generating) return;
+  bindHoldMic(mic, (text) => {
+    const dest = spokenDestination(text);
+    if (dest && dest !== "studio") {
+      switchView(dest);
+      return;
+    }
+    for (const style of ART_STYLES) {
+      if (style.id !== "auto" && text.includes(style.label)) state.artStyle = style.id;
+    }
+    state.artPrompt = text;
+    const input = document.getElementById("prompt");
+    if (input) input.value = text;
+    announce(`我听到了：${text}`);
+    runAI("image");
+  });
+}
+
+function renderTaskLobby() {
+  const el = document.getElementById("view-tasks");
+  const next = state.tasks.find((task) => !task.done && (!task.pro || isPro())) || state.tasks[0];
+  el.innerHTML = `
+    <div class="room-stage">
+      <p class="room-kicker">疗愈</p>
+      <h1>${escapeHTML(next.title)}</h1>
+      <p class="room-lead">${escapeHTML(next.desc)}</p>
+      <button type="button" class="hold-mic act" id="task-go">
+        <strong>开始</strong>
+        <small>${next.minutes} 分钟</small>
+      </button>
+      <p class="room-hint">向左滑，去欣赏</p>
+    </div>`;
+  el.querySelector("#task-go").addEventListener("click", () => {
+    if (next.pro && !requirePro(`"${next.title}"为会员练习。`)) return;
+    startTask(next);
+  });
+}
+
+function renderGalleryRoom() {
+  const el = document.getElementById("view-gallery");
+  const arts = D.artworks;
+  state.artIndex = ((state.artIndex || 0) % arts.length + arts.length) % arts.length;
+  const art = arts[state.artIndex];
+  const med = availableMeditations().find((item) => !item.pro || isPro()) || availableMeditations()[0];
+  el.innerHTML = `
+    <div class="room-stage">
+      <p class="room-kicker">欣赏 · ${state.artIndex + 1} / ${arts.length}</p>
+      <h1>${escapeHTML(art.title)}</h1>
+      <button type="button" class="room-visual art-hit" id="art-next" aria-label="换下一幅画">
+        <img src="${art.image}" alt="${escapeHTML(art.alt)}" />
+      </button>
+      <button type="button" class="hold-mic" id="hear-art">
+        <strong>听这幅画</strong>
+        <small>按住则开始冥想</small>
+      </button>
+      <p class="room-hint">点画面换一幅 · 向左滑去社区</p>
+    </div>`;
+  el.querySelector("#art-next").addEventListener("click", () => {
+    state.artIndex += 1;
+    renderGalleryRoom();
+    const next = D.artworks[state.artIndex % D.artworks.length];
+    announce(`${next.title}。点金色的圆听这幅画。`, { vibrate: false });
+  });
+  const hear = el.querySelector("#hear-art");
+  let timer = null;
+  let held = false;
+  hear.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    held = false;
+    timer = setTimeout(() => {
+      held = true;
+      if (med.pro && !requirePro("该冥想为会员专享。")) return;
+      startMeditation(med);
+    }, 420);
+  });
+  const up = () => {
+    clearTimeout(timer);
+    if (held) return;
+    if (art.pro && !requirePro("这幅深度导览为会员专享。")) return;
+    announce(`${art.title}。作者${art.author}。画面：${art.alt}色彩以${art.palette.join("、")}为主。构图：${art.composition}。情感：${art.emotion}。`);
+  };
+  hear.addEventListener("pointerup", up);
+  hear.addEventListener("pointercancel", () => clearTimeout(timer));
+}
+
+function renderGalleryFocus() {
+  const el = document.getElementById("view-gallery");
+  el.innerHTML = `<div class="room-stage med-live">${renderMeditationPlayer()}<p class="room-hint">结束之后回到这幅画</p></div>`;
+  el.querySelectorAll("[data-sound]").forEach((button) => button.addEventListener("click", () => {
+    if (!state.meditation) return;
+    state.meditation.sound = button.dataset.sound;
+    if (!state.meditation.paused) window.ArtMindAudio?.startNoise(button.dataset.sound);
+    renderGalleryFocus();
+  }));
+  el.querySelector("#med-volume")?.addEventListener("input", (event) => {
+    state.meditationVolume = Number(event.target.value);
+    window.ArtMindAudio?.setNoiseVolume(state.meditationVolume / 100);
+  });
+  el.querySelector("#med-pause")?.addEventListener("click", toggleMeditationPause);
+  el.querySelector("#med-stop")?.addEventListener("click", () => stopMeditation());
+}
+
+async function publishSpokenPost(text) {
+  const clean = text.trim();
+  if (!clean) return;
+  let verdict;
+  if (state.apiReady) {
+    const resp = await API.moderate(clean);
+    verdict = resp && resp.ok ? resp : { action: "block", reason: "审核服务异常。" };
+  } else {
+    verdict = mockModerate(clean);
+  }
+  if (verdict.action === "block") {
+    announce("这句话没有通过安全审核。" + (verdict.reason || ""), { assertive: true });
+    return;
+  }
+  if (verdict.action === "crisis") {
+    announce(verdict.message || "我们很关心你。如果这种感觉持续，请告诉信任的大人。", { assertive: true });
+    return;
+  }
+  if (state.apiReady) {
+    try { state.posts = await API.feed(); } catch {}
+  } else {
+    state.posts.unshift({ id: "p" + Date.now(), author: "我", text: clean, status: "approved" });
+  }
+  state.postIndex = 0;
+  announce("已发布。点一下可以听这条。");
+  renderCommunityRoom();
+}
+
+function renderCommunityRoom() {
+  const el = document.getElementById("view-community");
+  const visible = state.posts.filter((post) => post.status === "approved" || state.role === "parent");
+  const post = visible[state.postIndex % Math.max(1, visible.length)];
+  el.innerHTML = `
+    <div class="room-stage">
+      <p class="room-kicker">社区</p>
+      <h1>${post ? escapeHTML(post.author) : "还没有动态"}</h1>
+      <p class="room-lead">${post ? escapeHTML(post.status === "blocked" ? "这条内容已被拦住。" : post.text) : "按住中间，说出你想分享的话。"}</p>
+      <button type="button" class="hold-mic" id="community-go">
+        <strong>${state.role === "parent" ? "听一条" : "听 / 说"}</strong>
+        <small>${state.role === "parent" ? "下一条" : "点一下听，按住说"}</small>
+      </button>
+      <p class="room-hint">向左滑，去会员</p>
+    </div>`;
+  const button = el.querySelector("#community-go");
+  let timer = null;
+  let holding = false;
+  button.addEventListener("pointerdown", (event) => {
+    if (state.role === "parent") return;
+    event.preventDefault();
+    holding = false;
+    timer = setTimeout(async () => {
+      holding = true;
+      button.classList.add("holding");
+      window.ArtMindVoid?.setHolding(true);
+      window.ArtMindAudio?.stopSpeech();
+      setCaption("正在听。说完松开。");
+      await startMicPrompt();
+    }, 380);
+  });
+  button.addEventListener("pointerup", async () => {
+    clearTimeout(timer);
+    if (holding) {
+      holding = false;
+      button.classList.remove("holding");
+      window.ArtMindVoid?.setHolding(false);
+      const text = (await releaseHoldRecording()).trim();
+      if (text) publishSpokenPost(text);
+      return;
+    }
+    if (!visible.length) {
+      announce("还没有可以听的动态。");
+      return;
+    }
+    const current = visible[state.postIndex % visible.length];
+    state.postIndex += 1;
+    const spoken = current.status === "blocked" ? `内容已被拦住。${current.reason || ""}` : current.text;
+    announce(`${current.author}说：${spoken}`);
+    renderCommunityRoom();
+  });
+  button.addEventListener("pointercancel", () => clearTimeout(timer));
+}
+
+function renderSubscribeRoom() {
+  const el = document.getElementById("view-subscribe");
+  const pro = isPro();
+  el.innerHTML = `
+    <div class="room-stage">
+      <p class="room-kicker">会员</p>
+      <h1>${pro ? "你已经是会员" : "免费，或会员"}</h1>
+      <p class="room-lead">${pro ? "无限作画，全部练习都已打开。" : "免费每天可以画三次。会员可以无限作画，并打开全部练习。"}</p>
+      <button type="button" class="hold-mic act" id="plan-go" ${pro ? "disabled" : ""}>
+        <strong>${pro ? "已开通" : "听方案"}</strong>
+        <small>${pro ? "月度会员" : "再点一次开通"}</small>
+      </button>
+      <p class="room-hint">向右滑，回到社区</p>
+    </div>`;
+  const button = el.querySelector("#plan-go");
+  let armed = false;
+  button?.addEventListener("click", () => {
+    if (pro) return;
+    if (!armed) {
+      armed = true;
+      button.querySelector("strong").textContent = "开通会员";
+      announce("免费版每天可以画三次，能做基础练习。月度会员三十九元，可以无限作画，并打开全部练习。再点一次，开通月度会员。");
+      return;
+    }
+    subscribe("monthly");
+  });
+}
+
 /* ---------------- 模块一：创作工坊 ---------------- */
 function renderStudio() {
+  renderStudioRoom();
+  return;
   const el = document.getElementById("view-studio");
   const blind = state.role === "blind";
   const deaf = state.role === "deaf";
@@ -689,6 +1079,14 @@ function renderAIResult(kind, prompt, result) {
 /* ---------------- 模块二：疗愈任务 ---------------- */
 function renderTasks() {
   runTaskCleanup();
+  if (!state.activeTask) {
+    renderTaskLobby();
+    return;
+  }
+  const stageHost = document.getElementById("view-tasks");
+  stageHost.innerHTML = `<section class="room-stage task-live" id="task-stage" aria-live="polite"></section>`;
+  renderTaskStage(stageHost.querySelector("#task-stage"));
+  return;
   const el = document.getElementById("view-tasks");
   const p = D.progress;
   const isTherapist = state.role === "therapist";
@@ -1616,6 +2014,13 @@ function pageOf(list, batch, size) {
 }
 
 function renderGallery() {
+  if (!state.meditation) {
+    renderGalleryRoom();
+    return;
+  }
+  renderGalleryFocus();
+  return;
+  function renderGalleryLegacy() {
   const el = document.getElementById("view-gallery");
   const arts = pageOf(D.artworks, state.artBatch, ART_PAGE_SIZE);
   const meds = pageOf(availableMeditations(), state.medBatch, MED_PAGE_SIZE);
@@ -1716,10 +2121,13 @@ function renderGallery() {
   });
   el.querySelector("#med-pause")?.addEventListener("click", toggleMeditationPause);
   el.querySelector("#med-stop")?.addEventListener("click", () => stopMeditation());
+  }
 }
 
 /* ---------------- 模块四：安全社区 ---------------- */
 function renderCommunity() {
+  renderCommunityRoom();
+  return;
   const el = document.getElementById("view-community");
   const isParent = state.role === "parent";
 
@@ -1817,6 +2225,8 @@ function mockModerate(text) {
 
 /* ---------------- 订阅会员 ---------------- */
 function renderSubscribe() {
+  renderSubscribeRoom();
+  return;
   const el = document.getElementById("view-subscribe");
   el.innerHTML = `
     <div class="view-head">
@@ -1989,7 +2399,8 @@ function handleVoiceCommand(text) {
 async function changeRole(role) {
   state.role = role;
   const labels = { blind: "视障青少年", deaf: "听障青少年", therapist: "疗愈师", parent: "家长" };
-  announce(`已切换到${labels[role]}视角，界面与交互已自动适配。`);
+  document.body.dataset.role = role;
+  announce(`已切换到${labels[role]}视角。${role === "blind" ? "语音会在每次进入新页面时说明你在哪、下一步做什么。" : role === "deaf" ? "语音已关闭，字幕会显示同样的引导。" : "需要时可以点再听一遍。"}`);
   if (state.apiReady) {
     API.setRole(role);
     // 家长视角可见被拦截记录，刷新一次社区动态
@@ -2014,7 +2425,10 @@ async function bootstrapBackend() {
         badge.classList.remove("plan-free");
         badge.classList.add("plan-pro");
       }
-      try { state.posts = await API.feed(); } catch {}
+      try {
+        const feed = await API.feed();
+        if (Array.isArray(feed) && feed.length) state.posts = feed;
+      } catch {}
     }
   } catch {
     state.apiReady = false;
@@ -2038,17 +2452,24 @@ async function init() {
     switchView("subscribe");
   });
   document.getElementById("paywall-close").addEventListener("click", closePaywall);
-  // ESC 关闭弹窗
+  document.getElementById("btn-replay")?.addEventListener("click", () => orient(state.view));
+  document.body.dataset.role = state.role;
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !document.getElementById("paywall").hidden) closePaywall();
   });
+  window.ArtMindVoid?.start();
+  window.ArtMindVoid?.setRoom("studio");
+  bindDeck();
 
   if (window.ArtMindAudio?.isMobile && !window.ArtMindAudio.unlocked) {
     setCaption("手机上请先轻触一下屏幕，语音和背景音才能播放。");
   }
 
   await bootstrapBackend();
-  renderStudio();
+  ROOMS.forEach((view) => renderView(view));
+  state.view = "studio";
+  updateRoomChrome();
+  orient("studio");
 }
 
 document.addEventListener("DOMContentLoaded", init);
