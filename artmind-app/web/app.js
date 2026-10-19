@@ -114,23 +114,26 @@ function orient(view, { speak = true } = {}) {
 
 function speakWelcome() {
   setCaption(WELCOME);
-  const play = () => {
-    if (welcomeSaid) return;
+  const audio = window.ArtMindAudio;
+  let welcomePlaying = false;
+  const finish = () => {
     welcomeSaid = true;
     welcomeAt = Date.now();
-    window.ArtMindAudio?.unlock?.();
-    announce(WELCOME);
+    document.removeEventListener("touchend", attempt, true);
+    document.removeEventListener("pointerup", attempt, true);
   };
-  const audio = window.ArtMindAudio;
-  if (audio?.isMobile && !audio.unlocked) {
-    const once = () => {
-      document.removeEventListener("pointerdown", once, true);
-      play();
-    };
-    document.addEventListener("pointerdown", once, true);
-    return;
-  }
-  play();
+  const attempt = () => {
+    if (welcomeSaid || welcomePlaying || state.role === "deaf") return;
+    audio?.unlock?.();
+    const pending = audio?.playReady?.(WELCOME);
+    if (!pending) return;
+    welcomePlaying = true;
+    Promise.resolve(pending).then(finish).catch(() => { welcomePlaying = false; });
+  };
+  if (state.role === "deaf") return;
+  audio?.prime?.(WELCOME)?.then?.(() => attempt());
+  document.addEventListener("touchend", attempt, true);
+  document.addEventListener("pointerup", attempt, true);
 }
 
 function setCaption(text) {
@@ -207,8 +210,15 @@ function placeDeck(index, animate = false) {
   const track = deckTrack();
   if (!track) return;
   roomSlot = index;
-  track.style.transition = animate ? "transform .26s ease" : "none";
-  track.style.transform = `translate3d(${-(index * 100) / TRACK.length}%, 0, 0)`;
+  const left = index * Math.max(1, track.clientWidth || window.innerWidth);
+  if (!animate) {
+    const previous = track.style.scrollBehavior;
+    track.style.scrollBehavior = "auto";
+    track.scrollLeft = left;
+    track.style.scrollBehavior = previous;
+    return;
+  }
+  track.scrollTo({ left, behavior: "smooth" });
 }
 
 function scrollToRoom(view, behavior = "smooth") {
@@ -289,106 +299,49 @@ let roomSwipe = false;
 let lastRoomStep = 0;
 
 function bindDeck() {
-  if (!deckTrack()) return;
+  const track = deckTrack();
+  if (!track) return;
   placeDeck(trackIndex(state.view || "studio"), false);
-  const stepRoom = (direction) => {
-    const now = Date.now();
-    if (now - lastRoomStep < 420) return;
-    lastRoomStep = now;
-    const dest = roomSlot + direction;
-    if (dest < 0 || dest >= TRACK.length) return;
-    const looping = dest === 0 || dest === TRACK.length - 1;
-    const view = looping ? (dest === 0 ? "community" : "studio") : TRACK[dest];
-    placeDeck(dest, true);
-    if (looping) window.setTimeout(() => placeDeck(trackIndex(view), false), 280);
-    const first = !welcomeSaid || Date.now() - welcomeAt < 1600;
-    if (view && view !== state.view) switchView(view, { scroll: false, speak: !first });
-    if (!welcomeSaid) {
-      welcomeSaid = true;
-      welcomeAt = Date.now();
-      setCaption(WELCOME);
-      announce(WELCOME);
-    }
-  };
+  let jumping = false;
+  let settleTimer = null;
+  const width = () => Math.max(1, track.clientWidth || window.innerWidth);
+  track.addEventListener("scroll", () => {
+    if (jumping) return;
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      const index = Math.max(0, Math.min(TRACK.length - 1, Math.round(track.scrollLeft / width())));
+      if (index === 0 || index === TRACK.length - 1) {
+        const view = index === 0 ? "community" : "studio";
+        const dest = trackIndex(view);
+        jumping = true;
+        track.style.scrollBehavior = "auto";
+        track.scrollLeft = dest * width();
+        roomSlot = dest;
+        track.style.scrollBehavior = "";
+        jumping = false;
+        if (view !== state.view) switchView(view, { scroll: false });
+        return;
+      }
+      roomSlot = index;
+      const view = TRACK[index];
+      if (view && view !== state.view) switchView(view, { scroll: false });
+    }, 140);
+  }, { passive: true });
 
-  let startX = 0;
-  let startY = 0;
-  let tracking = false;
-  let axis = "";
-  let pointerId = null;
-  const skip = (target) => target?.closest?.("input, textarea, select, .paint-canvas, .room-top");
-  const arm = (x, y) => {
-    tracking = true;
-    axis = "";
-    roomSwipe = false;
-    startX = x;
-    startY = y;
+  const go = (direction) => {
+    const current = Math.round(track.scrollLeft / width());
+    track.scrollTo({ left: (current + direction) * width(), behavior: "smooth" });
   };
-  const drag = (x, y, event) => {
-    if (!tracking) return;
-    const dx = x - startX;
-    const dy = y - startY;
-    if (!axis && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
-      axis = Math.abs(dx) > Math.abs(dy) * 0.75 ? "x" : "y";
-    }
-    if (axis !== "x") return;
-    roomSwipe = true;
-    if (event?.cancelable) event.preventDefault();
+  const bindPeek = (id, direction) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.addEventListener("click", (event) => {
+      event.preventDefault();
+      go(direction);
+    });
   };
-  const release = (x, y) => {
-    if (!tracking) return;
-    tracking = false;
-    const dx = x - startX;
-    const dy = y - startY;
-    if (Math.abs(dx) < 28 || Math.abs(dx) < Math.abs(dy)) {
-      roomSwipe = false;
-      return;
-    }
-    roomSwipe = true;
-    stepRoom(dx < 0 ? 1 : -1);
-  };
-  document.addEventListener("pointerdown", (event) => {
-    if (!event.isPrimary || skip(event.target)) return;
-    pointerId = event.pointerId;
-    arm(event.clientX, event.clientY);
-    try { event.target.setPointerCapture?.(event.pointerId); } catch {}
-  }, { capture: true });
-  document.addEventListener("pointermove", (event) => {
-    if (event.pointerId !== pointerId) return;
-    drag(event.clientX, event.clientY, event);
-  }, { capture: true });
-  document.addEventListener("pointerup", (event) => {
-    if (event.pointerId !== pointerId) return;
-    release(event.clientX, event.clientY);
-  }, { capture: true });
-  document.addEventListener("pointercancel", (event) => {
-    if (event.pointerId !== pointerId) return;
-    if (axis === "x") release(event.clientX, event.clientY);
-    else tracking = false;
-  }, { capture: true });
-  document.addEventListener("touchstart", (event) => {
-    if (event.touches.length !== 1 || skip(event.target)) return;
-    const point = event.touches[0];
-    arm(point.clientX, point.clientY);
-  }, { capture: true, passive: true });
-  document.addEventListener("touchmove", (event) => {
-    if (event.touches.length !== 1) return;
-    const point = event.touches[0];
-    drag(point.clientX, point.clientY, event);
-  }, { capture: true, passive: false });
-  document.addEventListener("touchend", (event) => {
-    const point = event.changedTouches?.[0];
-    if (!point) return;
-    release(point.clientX, point.clientY);
-  }, { capture: true });
-  document.addEventListener("touchcancel", (event) => {
-    const point = event.changedTouches?.[0];
-    if (point && axis === "x") release(point.clientX, point.clientY);
-    else tracking = false;
-  }, { capture: true });
-
-  document.getElementById("peek-left")?.addEventListener("click", () => stepRoom(-1));
-  document.getElementById("peek-right")?.addEventListener("click", () => stepRoom(1));
+  bindPeek("peek-left", -1);
+  bindPeek("peek-right", 1);
 }
 
 let lastVerticalSwipeAt = 0;
@@ -2826,6 +2779,7 @@ async function init() {
     return;
   }
   blockMobileSelection();
+  window.ArtMindAudio?.prime?.(WELCOME);
   window.ArtMindVoid?.start();
   window.ArtMindVoid?.setRoom("studio");
   bindDeck();

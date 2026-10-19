@@ -334,6 +334,28 @@ window.ArtMindAudio = (() => {
     }
   }
 
+  const ttsPending = new Map();
+  function prime(text) {
+    const clean = String(text || "").trim().slice(0, MAX_TTS_LEN);
+    if (!clean || ttsCache.has(clean)) return Promise.resolve(ttsCache.get(clean) || "");
+    if (ttsPending.has(clean)) return ttsPending.get(clean);
+    const job = fetchTts(clean).catch(() => "").finally(() => ttsPending.delete(clean));
+    ttsPending.set(clean, job);
+    return job;
+  }
+
+  function playReady(text) {
+    const clean = String(text || "").trim().slice(0, MAX_TTS_LEN);
+    const src = ttsCache.get(clean);
+    if (!src) return null;
+    stopSpeech();
+    const token = speakToken;
+    voiceEl.src = src;
+    voiceEl.onended = () => { if (token === speakToken) duck(false); };
+    duck(true);
+    return voiceEl.play();
+  }
+
   function speak(text) {
     const clean = String(text || "").trim().slice(0, MAX_TTS_LEN);
     if (!clean) return;
@@ -356,6 +378,8 @@ window.ArtMindAudio = (() => {
     isMobile,
     get unlocked() { return unlocked; },
     unlock,
+    prime,
+    playReady,
     speak,
     stopSpeech,
     startNoise,
