@@ -772,8 +772,14 @@ html.void-on .caption-bar {
 html.void-on .caption-icon { display: none; }
 html[data-shell="mobile"].void-on .room-visual:has(img),
 html[data-shell="mobile"].void-on .room-visual:has(.art-loading) {
-  max-height: 26vh;
+  width: 100%;
+  max-width: 100%;
+  max-height: 28vh;
 }
+html[data-shell="mobile"] .breath-room { align-items: center; text-align: center; }
+html[data-shell="mobile"] .breath-wrap { height: auto; margin: 4px 0; }
+html[data-shell="mobile"] .breath-bubble { width: min(42vw, 168px); height: min(42vw, 168px); }
+html[data-shell="mobile"] .stage-tip { margin: 0 auto 6px; max-width: 22ch; }
 body[data-contrast="high"] #void-root { display: none; }
 
 /* 电脑端：大字、大按钮、白字压在深色底上 */

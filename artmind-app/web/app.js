@@ -90,7 +90,7 @@ function announce(text, { assertive = false, vibrate = true } = {}) {
 
 const PLACES = {
   studio: { n: 1, name: "创作", next: "疗愈", say: "创作。按住屏幕中间的麦克风，说出你想画的画面，松开手指就开始画。向左滑，去疗愈。向右滑，去社区。" },
-  tasks: { n: 2, name: "疗愈", next: "欣赏", say: "疗愈。上下滑动换一个练习，点中间开始。向左滑，去欣赏。" },
+  tasks: { n: 2, name: "疗愈", next: "欣赏", say: "疗愈。按住金色泡泡慢慢吸气，松开时呼气。向左滑，去欣赏。" },
   gallery: { n: 3, name: "欣赏", next: "社区", say: "欣赏。上下滑动画面，会换一幅画，并念出解说。向左滑，去社区。" },
   community: { n: 4, name: "社区", next: "创作", say: "社区。点一下，听一条动态。按住中间，说出你想分享的话，松开就发布。向左滑，回到创作。" },
 };
@@ -251,12 +251,16 @@ function switchView(view, { scroll = true, speak = true } = {}) {
   }
   if (!ROOMS.includes(view)) return;
   if (view === state.view && document.getElementById("view-" + view)?.childElementCount) return;
+  if (state.view === "gallery" && view !== "gallery") window.ArtMindAudio?.stopUnlessWelcome?.(WELCOME);
   if (view !== "gallery" && state.meditation) stopMeditation({ silent: true });
   if (view !== "studio") cancelPromptRecording();
   if (view !== "tasks") {
     runTaskCleanup();
     window.ArtMindAudio?.stopFx();
-    if (state.activeTask) {
+    if (isMobileShell()) {
+      const task = taskList()[0];
+      if (task) state.activeTask = { id: task.id, finished: false, summary: "", resultHtml: "", ...TASK_INIT.breath() };
+    } else if (state.activeTask) {
       state.activeTask = null;
       renderTaskLobby();
     }
@@ -296,6 +300,9 @@ function bindDeck() {
   const width = () => Math.max(1, track.clientWidth || window.innerWidth);
   track.addEventListener("scroll", () => {
     if (jumping) return;
+    if (state.view === "gallery" && Math.abs(track.scrollLeft - trackIndex("gallery") * width()) > 28) {
+      window.ArtMindAudio?.stopUnlessWelcome?.(WELCOME);
+    }
     clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
       const index = Math.max(0, Math.min(TRACK.length - 1, Math.round(track.scrollLeft / width())));
@@ -1372,22 +1379,19 @@ function renderAIResult(kind, prompt, result) {
 /* ---------------- 模块二：疗愈任务 ---------------- */
 function renderTasks() {
   if (isMobileShell()) {
-    runTaskCleanup();
-    if (!state.activeTask) {
-      renderTaskLobby();
-      return;
-    }
+    const task = taskList()[0];
     const stageHost = document.getElementById("view-tasks");
-    const index = state.taskIndex + 1;
-    const total = taskList().length;
+    if (!task || !stageHost) return;
+    if (!state.activeTask || state.activeTask.id !== task.id) {
+      state.activeTask = { id: task.id, finished: false, summary: "", resultHtml: "", ...TASK_INIT.breath() };
+    }
     stageHost.innerHTML = `
-      <section class="room-stage task-live">
-        ${exerciseSwitcher(index, total)}
+      <section class="room-stage task-live breath-room">
+        <p class="room-kicker">疗愈</p>
+        <h1>呼吸泡泡</h1>
         <div id="task-stage" aria-live="polite"></div>
+        <p class="room-hint">左右滑动换模块</p>
       </section>`;
-    stageHost.querySelectorAll("[data-task-step]").forEach((button) => {
-      button.addEventListener("click", () => stepTask(Number(button.dataset.taskStep)));
-    });
     renderTaskStage(stageHost.querySelector("#task-stage"));
     return;
   }
@@ -1614,6 +1618,22 @@ function renderTaskStage(stage) {
     ${Haptics?.canVibrate ? "" : `<p class="service-note haptic-note">${Haptics?.isIOS
       ? "iPhone 网页只支持点击时轻震一下，节奏震动已改为节拍声和泡泡闪动。"
       : "当前浏览器不支持网页震动，已改用节拍声和画面闪动代替。"}</p>`}`;
+
+  if (isMobileShell() && t.kind === "breath") {
+    if (at.finished) {
+      stage.innerHTML = `
+        <div class="stage-done">
+          <p class="done-title">完成啦</p>
+          <p>${escapeHTML(at.summary)}</p>
+          <button class="btn btn-primary" id="task-again">再做一次</button>
+        </div>`;
+      stage.querySelector("#task-again").onclick = () => startTask(t);
+    } else {
+      stage.innerHTML = `<div class="stage-body"></div>`;
+      TASK_RENDER.breath(stage.querySelector(".stage-body"), at);
+    }
+    return;
+  }
 
   if (at.finished) {
     stage.innerHTML = `${head}

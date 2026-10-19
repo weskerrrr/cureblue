@@ -327,9 +327,21 @@ window.ArtMindAudio = (() => {
 
   function stopSpeech() {
     speakToken += 1;
-    if (hasNativeTTS) window.speechSynthesis.cancel();
+    if (hasNativeTTS) {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.pause();
+      window.speechSynthesis.cancel();
+    }
     voiceEl.pause();
+    activeLine = "";
     duck(false);
+  }
+
+  function stopUnlessWelcome(welcome) {
+    const synth = window.speechSynthesis;
+    const speaking = hasNativeTTS && (synth.speaking || synth.pending);
+    if (speaking && activeLine === welcome) return;
+    stopSpeech();
   }
 
   async function fetchTts(text, attempt = 0) {
@@ -533,6 +545,7 @@ window.ArtMindAudio = (() => {
     onFinished,
     speak,
     stopSpeech,
+    stopUnlessWelcome,
     startNoise,
     pauseNoise,
     resumeNoise,
