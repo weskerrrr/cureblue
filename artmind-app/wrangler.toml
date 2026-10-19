@@ -14,6 +14,11 @@ binding = "DB"
 database_name = "artmind"
 database_id = "9b99f0b4-0124-4af6-9cdd-bab22d8441ba"
 
-# Workers AI：Flux Schnell 生图（env.AI）
+# Workers AI：没有方舟密钥时的生图和朗读回退（env.AI）
 [ai]
 binding = "AI"
+
+# 生图模型。密钥 ARK_API_KEY 只放在 Pages Secret，不写进仓库。
+[vars]
+ARK_IMAGE_MODEL = "doubao-seedream-5-0-pro-260628"
+ARK_IMAGE_SIZE = "2K"

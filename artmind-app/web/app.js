@@ -188,7 +188,41 @@ function scrollToRoom(view, behavior = "smooth") {
   deck.scrollTo({ left: index * deck.clientWidth, behavior });
 }
 
+function switchDesktopView(view) {
+  const labels = {
+    studio: "创作工坊",
+    tasks: "疗愈任务",
+    gallery: "欣赏与冥想",
+    community: "安全社区",
+    subscribe: "订阅会员",
+  };
+  if (!labels[view]) return;
+  if (view !== "gallery" && state.meditation) stopMeditation({ silent: true });
+  if (view !== "tasks") {
+    runTaskCleanup();
+    window.ArtMindAudio?.stopFx();
+  }
+  state.view = view;
+  document.querySelectorAll(".view").forEach((el) => {
+    el.hidden = true;
+  });
+  document.querySelectorAll(".navbtn").forEach((b) => {
+    const on = b.dataset.view === view;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", String(on));
+  });
+  const panel = document.getElementById("view-" + view);
+  if (panel) panel.hidden = false;
+  renderView(view);
+  document.getElementById("main")?.focus();
+  announce("已打开" + labels[view]);
+}
+
 function switchView(view, { scroll = true } = {}) {
+  if (!isMobileShell()) {
+    switchDesktopView(view);
+    return;
+  }
   if (!ROOMS.includes(view)) return;
   if (view === state.view && document.getElementById("view-" + view)?.childElementCount) return;
   if (view !== "gallery" && state.meditation) stopMeditation({ silent: true });
@@ -295,8 +329,18 @@ function bindVerticalCycle(el, onDelta) {
   el.addEventListener("pointercancel", () => { tracking = false; });
 }
 
+function isMobileShell() {
+  return document.documentElement.dataset.shell !== "desktop";
+}
+
 function renderView(view) {
-  const map = { studio: renderStudio, tasks: renderTasks, gallery: renderGallery, community: renderCommunity };
+  const map = {
+    studio: renderStudio,
+    tasks: renderTasks,
+    gallery: renderGallery,
+    community: renderCommunity,
+    subscribe: renderSubscribe,
+  };
   map[view]?.();
 }
 
@@ -599,8 +643,10 @@ function renderSubscribeRoom() {
 
 /* ---------------- 模块一：创作工坊 ---------------- */
 function renderStudio() {
-  renderStudioRoom();
-  return;
+  if (isMobileShell()) {
+    renderStudioRoom();
+    return;
+  }
   const el = document.getElementById("view-studio");
   const blind = state.role === "blind";
   const deaf = state.role === "deaf";
@@ -1143,15 +1189,17 @@ function renderAIResult(kind, prompt, result) {
 
 /* ---------------- 模块二：疗愈任务 ---------------- */
 function renderTasks() {
-  runTaskCleanup();
-  if (!state.activeTask) {
-    renderTaskLobby();
+  if (isMobileShell()) {
+    runTaskCleanup();
+    if (!state.activeTask) {
+      renderTaskLobby();
+      return;
+    }
+    const stageHost = document.getElementById("view-tasks");
+    stageHost.innerHTML = `<section class="room-stage task-live" id="task-stage" aria-live="polite"></section>`;
+    renderTaskStage(stageHost.querySelector("#task-stage"));
     return;
   }
-  const stageHost = document.getElementById("view-tasks");
-  stageHost.innerHTML = `<section class="room-stage task-live" id="task-stage" aria-live="polite"></section>`;
-  renderTaskStage(stageHost.querySelector("#task-stage"));
-  return;
   const el = document.getElementById("view-tasks");
   const p = D.progress;
   const isTherapist = state.role === "therapist";
@@ -2079,12 +2127,15 @@ function pageOf(list, batch, size) {
 }
 
 function renderGallery() {
-  if (!state.meditation) {
-    renderGalleryRoom();
+  if (isMobileShell()) {
+    if (!state.meditation) {
+      renderGalleryRoom();
+      return;
+    }
+    renderGalleryFocus();
     return;
   }
-  renderGalleryFocus();
-  return;
+  renderGalleryLegacy();
   function renderGalleryLegacy() {
   const el = document.getElementById("view-gallery");
   const arts = pageOf(D.artworks, state.artBatch, ART_PAGE_SIZE);
@@ -2191,8 +2242,10 @@ function renderGallery() {
 
 /* ---------------- 模块四：安全社区 ---------------- */
 function renderCommunity() {
-  renderCommunityRoom();
-  return;
+  if (isMobileShell()) {
+    renderCommunityRoom();
+    return;
+  }
   const el = document.getElementById("view-community");
   const isParent = state.role === "parent";
 
@@ -2290,8 +2343,10 @@ function mockModerate(text) {
 
 /* ---------------- 订阅会员 ---------------- */
 function renderSubscribe() {
-  renderSubscribeRoom();
-  return;
+  if (isMobileShell()) {
+    renderSubscribeRoom();
+    return;
+  }
   const el = document.getElementById("view-subscribe");
   el.innerHTML = `
     <div class="view-head">
@@ -2518,6 +2573,11 @@ async function init() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !document.getElementById("paywall").hidden) closePaywall();
   });
+  if (!isMobileShell()) {
+    await bootstrapBackend();
+    switchDesktopView("studio");
+    return;
+  }
   window.ArtMindVoid?.start();
   window.ArtMindVoid?.setRoom("studio");
   const deck = document.getElementById("main");

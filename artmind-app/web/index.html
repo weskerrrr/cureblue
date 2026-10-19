@@ -6,66 +6,145 @@
     <meta name="theme-color" content="#07060c" />
     <meta name="description" content="心绘 ArtMind — 用语音带路的艺术疗愈。视障用户听得清，明眼用户看得懂。" />
     <title>心绘 ArtMind · AI 艺术疗愈</title>
+    <script>
+      (function () {
+        var ua = navigator.userAgent || "";
+        var touchMac = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+        var mobile = /Android|iPhone|iPod|Mobile/i.test(ua) || /iPad/i.test(ua) || touchMac;
+        document.documentElement.dataset.shell = mobile ? "mobile" : "desktop";
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Noto+Sans+SC:wght@400;600;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body data-contrast="normal" data-fontscale="1">
-    <!-- 跳转到主内容：键盘/读屏用户可达 -->
     <a class="skip-link" href="#main">跳到主内容</a>
 
-    <!-- 全局无障碍播报区：所有状态变化通过这里朗读 -->
     <div id="live-polite" class="sr-only" aria-live="polite" role="status"></div>
     <div id="live-assertive" class="sr-only" aria-live="assertive" role="alert"></div>
 
-    <!-- 顶部无障碍工具条 -->
-    <header class="topbar room-top">
-      <div class="brand">
-        <span class="brand-mark" aria-hidden="true"></span>
-        <span class="brand-name">心绘</span>
+    <div data-shell="desktop">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">◐</span>
+          <span class="brand-name">心绘 <small>ArtMind</small></span>
+        </div>
+
+        <div class="a11y-tools" role="toolbar" aria-label="无障碍设置">
+          <button id="btn-voice" class="tool" aria-pressed="false" aria-label="语音操控：关闭">
+            <span aria-hidden="true">🎙️</span><span class="tool-text">语音操控</span>
+          </button>
+          <button id="btn-contrast" class="tool" aria-pressed="false" aria-label="高对比模式：关闭">
+            <span aria-hidden="true">◑</span><span class="tool-text">高对比</span>
+          </button>
+          <button id="btn-font-dec" class="tool" aria-label="减小字号"><span aria-hidden="true">A−</span></button>
+          <button id="btn-font-inc" class="tool" aria-label="增大字号"><span aria-hidden="true">A+</span></button>
+          <button id="btn-captions" class="tool" aria-pressed="true" aria-label="字幕：开启">
+            <span aria-hidden="true">💬</span><span class="tool-text">字幕</span>
+          </button>
+        </div>
+
+        <div class="profile">
+          <label class="role-switch">
+            <span class="sr-only">选择当前用户角色</span>
+            <select id="role-select" aria-label="当前用户角色">
+              <option value="blind">视障青少年</option>
+              <option value="deaf">听障青少年</option>
+              <option value="therapist">疗愈师</option>
+              <option value="parent">家长</option>
+            </select>
+          </label>
+          <span id="plan-badge" class="plan-badge plan-free" hidden>会员</span>
+        </div>
+      </header>
+
+      <div class="layout">
+        <nav class="sidenav" aria-label="主功能导航">
+          <ul role="tablist" aria-orientation="vertical">
+            <li><button class="navbtn active" role="tab" aria-selected="true" data-view="studio"><span aria-hidden="true">🎨</span> 创作工坊</button></li>
+            <li><button class="navbtn" role="tab" aria-selected="false" data-view="tasks"><span aria-hidden="true">🌱</span> 疗愈任务</button></li>
+            <li><button class="navbtn" role="tab" aria-selected="false" data-view="gallery"><span aria-hidden="true">🖼️</span> 欣赏与冥想</button></li>
+            <li><button class="navbtn" role="tab" aria-selected="false" data-view="community"><span aria-hidden="true">🤝</span> 安全社区</button></li>
+            <li><button class="navbtn" role="tab" aria-selected="false" data-view="subscribe"><span aria-hidden="true">✦</span> 订阅会员</button></li>
+          </ul>
+          <div class="voice-hint" id="voice-hint" hidden>
+            <strong>语音指令示例</strong>
+            <ul>
+              <li>“打开创作工坊”</li>
+              <li>“生成一片蓝色海洋”</li>
+              <li>“朗读这幅画”</li>
+              <li>“今天的疗愈任务”</li>
+            </ul>
+          </div>
+        </nav>
+
+        <main id="main" class="content" tabindex="-1">
+          <section id="view-studio" class="view" role="tabpanel" aria-label="AI 多模态艺术创作工坊"></section>
+          <section id="view-tasks" class="view" role="tabpanel" hidden aria-label="个性化 AI 疗愈任务系统"></section>
+          <section id="view-gallery" class="view" role="tabpanel" hidden aria-label="无障碍艺术欣赏与 AI 冥想引导"></section>
+          <section id="view-community" class="view" role="tabpanel" hidden aria-label="未成年人安全线上社区"></section>
+          <section id="view-subscribe" class="view" role="tabpanel" hidden aria-label="订阅会员"></section>
+        </main>
       </div>
-      <div class="room-dots" id="room-dots" aria-hidden="true"></div>
-      <select id="role-select" aria-label="当前用户角色">
-        <option value="blind">视障</option>
-        <option value="deaf">听障</option>
-        <option value="therapist">疗愈师</option>
-        <option value="parent">家长</option>
-      </select>
-      <span id="plan-badge" class="plan-badge plan-free" hidden>免费版</span>
-    </header>
-
-    <div class="peek peek-left" id="peek-left" aria-hidden="true"></div>
-    <div class="peek peek-right" id="peek-right" aria-hidden="true"></div>
-
-    <main id="main" class="deck" tabindex="-1">
-      <section class="room view room-clone" id="clone-before" aria-hidden="true" inert></section>
-      <section id="view-studio" class="room view" data-room="studio" aria-label="创作"></section>
-      <section id="view-tasks" class="room view" data-room="tasks" aria-label="疗愈"></section>
-      <section id="view-gallery" class="room view" data-room="gallery" aria-label="欣赏"></section>
-      <section id="view-community" class="room view" data-room="community" aria-label="社区"></section>
-      <section class="room view room-clone" id="clone-after" aria-hidden="true" inert></section>
-    </main>
-
-    <div class="a11y-tools room-tools" hidden>
-      <button id="btn-voice" class="tool" aria-pressed="false" aria-label="语音操控：关闭">语音</button>
-      <button id="btn-contrast" class="tool" aria-pressed="false" aria-label="高对比模式：关闭">高对比</button>
-      <button id="btn-font-dec" class="tool" aria-label="减小字号">A−</button>
-      <button id="btn-font-inc" class="tool" aria-label="增大字号">A+</button>
-      <button id="btn-captions" class="tool" aria-pressed="true" aria-label="字幕：开启">字幕</button>
-      <div id="voice-hint" hidden></div>
-      <button id="btn-replay" type="button">再听一遍</button>
-      <p id="now-kicker"></p>
-      <p id="now-line"></p>
     </div>
 
-    <!-- 字幕条：所有语音播报同步显示文字 -->
+    <div data-shell="mobile">
+      <header class="topbar room-top">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">心绘</span>
+        </div>
+        <div class="room-dots" id="room-dots" aria-hidden="true"></div>
+        <select id="role-select" aria-label="当前用户角色">
+          <option value="blind">视障</option>
+          <option value="deaf">听障</option>
+          <option value="therapist">疗愈师</option>
+          <option value="parent">家长</option>
+        </select>
+        <span id="plan-badge" class="plan-badge plan-free" hidden>免费版</span>
+      </header>
+
+      <div class="peek peek-left" id="peek-left" aria-hidden="true"></div>
+      <div class="peek peek-right" id="peek-right" aria-hidden="true"></div>
+
+      <main id="main" class="deck" tabindex="-1">
+        <section class="room view room-clone" id="clone-before" aria-hidden="true" inert></section>
+        <section id="view-studio" class="room view" data-room="studio" aria-label="创作"></section>
+        <section id="view-tasks" class="room view" data-room="tasks" aria-label="疗愈"></section>
+        <section id="view-gallery" class="room view" data-room="gallery" aria-label="欣赏"></section>
+        <section id="view-community" class="room view" data-room="community" aria-label="社区"></section>
+        <section class="room view room-clone" id="clone-after" aria-hidden="true" inert></section>
+      </main>
+
+      <div class="a11y-tools room-tools" hidden>
+        <button id="btn-voice" class="tool" aria-pressed="false" aria-label="语音操控：关闭">语音</button>
+        <button id="btn-contrast" class="tool" aria-pressed="false" aria-label="高对比模式：关闭">高对比</button>
+        <button id="btn-font-dec" class="tool" aria-label="减小字号">A−</button>
+        <button id="btn-font-inc" class="tool" aria-label="增大字号">A+</button>
+        <button id="btn-captions" class="tool" aria-pressed="true" aria-label="字幕：开启">字幕</button>
+        <div id="voice-hint" hidden></div>
+        <button id="btn-replay" type="button">再听一遍</button>
+        <p id="now-kicker"></p>
+        <p id="now-line"></p>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        var shell = document.documentElement.dataset.shell;
+        document.querySelectorAll("[data-shell]").forEach(function (node) {
+          if (node.getAttribute("data-shell") !== shell) node.remove();
+        });
+      })();
+    </script>
+
     <div id="caption-bar" class="caption-bar" aria-hidden="true">
       <span class="caption-icon">💬</span>
       <span id="caption-text">字幕已开启，语音内容将同步显示在这里。</span>
     </div>
 
-    <!-- Paywall 弹窗 -->
     <div id="paywall" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="paywall-title">
       <div class="modal-card">
         <h2 id="paywall-title">该功能为订阅会员专享</h2>

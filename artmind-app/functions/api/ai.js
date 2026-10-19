@@ -22,7 +22,9 @@ export async function onRequestPost({ request, env }) {
   let result;
   try {
     result = await generate(capability, prompt, options, env);
-  } catch {
+  } catch (err) {
+    const message = String(err?.message || "");
+    if (message.startsWith("方舟")) return json({ ok: false, error: message }, 502);
     return json({ ok: false, error: "生图服务暂时不可用，请换一个接口或稍后重试。" }, 502);
   }
 

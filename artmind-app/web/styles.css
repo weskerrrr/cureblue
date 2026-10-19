@@ -553,8 +553,8 @@ body.is-speaking .voice-lens { animation: lens-breathe 1.6s ease-in-out infinite
   .now-bar, .navbtn, .navbtn.active, .card, .voice-lens, .hold-mic.holding { transform: none !important; }
 }
 
-/* 手机房间：一屏一事，左右滑切换 */
-body { overflow: hidden; }
+/* 手机房间：一屏一事，左右滑切换。电脑端保持原来可以滚动的页面。 */
+html[data-shell="mobile"] body { overflow: hidden; }
 .room-top {
   position: fixed; inset: 0 0 auto 0; z-index: 20;
   background: linear-gradient(180deg, rgba(16,19,26,.92), rgba(16,19,26,0));

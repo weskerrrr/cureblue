@@ -1,7 +1,8 @@
 /**
- * 心绘生图：任意中文先译成英文，再交给 Cloudflare Flux / Pollinations。
- * 例句走本地词典；自定义描述走 Workers AI 翻译，避免中文原文进入生图模型。
+ * 心绘生图。配置了 ARK_API_KEY 时，中文描述直接交给火山方舟。
+ * 没有密钥时，仍先译成英文，再交给 Cloudflare Flux / Pollinations。
  */
+import { arkImage } from "./ark.js";
 
 const POLLINATIONS = "https://image.pollinations.ai/prompt/";
 const CF_IMAGE = "@cf/black-forest-labs/flux-1-schnell";
@@ -246,6 +247,7 @@ function providerOrder(preferred) {
 export async function buildImageResult(prompt, styleId = "auto", env, preferred = "cloudflare") {
   const clean = focusSubject(prompt) || (prompt || "").trim();
   const style = STYLE_EN[styleId] ? styleId : "auto";
+  if (env?.ARK_API_KEY) return arkImage(env, clean, style);
   const sceneEn = await translateZhToEn(clean, env);
   const englishPrompt = buildEnglishPrompt(sceneEn, STYLE_EN[style]);
 
