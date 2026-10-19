@@ -597,6 +597,25 @@ html[data-shell="mobile"] textarea {
   padding: calc(72px + env(safe-area-inset-top)) 22px calc(96px + env(safe-area-inset-bottom));
 }
 .room-stage { min-height: 100%; display: flex; flex-direction: column; align-items: center; text-align: center; }
+html[data-shell="mobile"] .room {
+  display: flex;
+  padding: calc(68px + env(safe-area-inset-top)) 76px calc(132px + env(safe-area-inset-bottom));
+}
+html[data-shell="mobile"] .room-stage {
+  flex: 1; min-height: 0; width: 100%; justify-content: flex-start; gap: 8px;
+}
+html[data-shell="mobile"] .hold-mic { margin-top: 12px; width: 148px; height: 148px; flex: 0 0 auto; }
+html[data-shell="mobile"] .room-visual,
+html[data-shell="mobile"].void-on .room-visual,
+html.void-on .room-visual:has(img) {
+  max-height: 26vh; margin: 6px 0;
+}
+html[data-shell="mobile"] .caption-bar {
+  left: 76px; right: 76px; width: auto; max-width: none; transform: none;
+  bottom: calc(12px + env(safe-area-inset-bottom));
+}
+html[data-shell="mobile"] .said-line { max-width: 100%; }
+html[data-shell="mobile"] .listen-hit { margin-top: 8px; }
 .room-kicker { margin: 8px 0 0; letter-spacing: .18em; color: var(--primary); font-size: .82rem; }
 .room-stage h1 { font-family: var(--display); font-size: 2rem; margin: 8px 0 6px; }
 .room-lead, .room-empty { color: var(--text-dim); max-width: 28ch; margin: 0 auto 12px; }
@@ -751,6 +770,10 @@ html.void-on .caption-bar {
   border: 0; box-shadow: none; border-radius: 0;
 }
 html.void-on .caption-icon { display: none; }
+html[data-shell="mobile"].void-on .room-visual:has(img),
+html[data-shell="mobile"].void-on .room-visual:has(.art-loading) {
+  max-height: 26vh;
+}
 body[data-contrast="high"] #void-root { display: none; }
 
 /* 电脑端：大字、大按钮、白字压在深色底上 */

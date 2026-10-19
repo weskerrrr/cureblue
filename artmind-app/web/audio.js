@@ -264,6 +264,17 @@ window.ArtMindAudio = (() => {
     spokenHandlers.add(fn);
   }
 
+  const finishedHandlers = new Set();
+  function onFinished(fn) {
+    finishedHandlers.add(fn);
+  }
+
+  function notifyFinished(text) {
+    finishedHandlers.forEach((fn) => {
+      try { fn(text); } catch {}
+    });
+  }
+
   function notifySpoken(text) {
     spokenHandlers.forEach((fn) => {
       try { fn(text); } catch {}
@@ -417,9 +428,13 @@ window.ArtMindAudio = (() => {
   }
 
   let liveUtter = null;
+  let lineHeard = false;
   function chromeSpeak(text, { now = false } = {}) {
     const clean = String(text || "").trim().slice(0, MAX_TTS_LEN);
     if (!clean || !hasNativeTTS) return;
+    const synth = window.speechSynthesis;
+    if (liveUtter && liveUtter.text === clean && lineHeard && (synth.speaking || synth.pending)) return;
+    lineHeard = false;
     stopSpeech();
     const token = speakToken;
     const utter = new SpeechSynthesisUtterance(clean);
@@ -432,12 +447,17 @@ window.ArtMindAudio = (() => {
     utter.onstart = () => {
       if (token !== speakToken) return;
       started = true;
+      lineHeard = true;
       activeLine = clean;
       if (armedText === clean) armedText = "";
       notifySpoken(clean);
       duck(true);
     };
-    utter.onend = () => { if (token === speakToken) duck(false); };
+    utter.onend = () => {
+      if (token !== speakToken) return;
+      duck(false);
+      notifyFinished(clean);
+    };
     utter.onerror = (event) => {
       if (token !== speakToken || started) return;
       if (event.error === "interrupted" || event.error === "canceled") return;
@@ -510,6 +530,7 @@ window.ArtMindAudio = (() => {
     playReady,
     armAutoplay,
     onSpoken,
+    onFinished,
     speak,
     stopSpeech,
     startNoise,

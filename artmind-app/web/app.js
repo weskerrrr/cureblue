@@ -116,10 +116,11 @@ function speakWelcome() {
   setCaption(WELCOME);
   if (state.role === "deaf") return;
   const audio = window.ArtMindAudio;
-  audio?.onSpoken?.((text) => {
+  audio?.onFinished?.((text) => {
     if (welcomeSaid || text !== WELCOME) return;
     welcomeSaid = true;
     welcomeAt = Date.now();
+    orient(state.view, { speak: true });
   });
   audio?.armAutoplay?.(WELCOME);
 }
@@ -555,7 +556,7 @@ function renderStudioRoom() {
 
 function taskList() {
   if (!isMobileShell()) return state.tasks;
-  return state.tasks.filter((task) => !["mood", "weather", "triptych"].includes(task.kind));
+  return state.tasks.filter((task) => !["mood", "weather", "triptych", "melody"].includes(task.kind));
 }
 
 function currentTask() {
