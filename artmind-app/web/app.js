@@ -95,7 +95,6 @@ const PLACES = {
   community: { n: 4, name: "社区", next: "创作", say: "社区。点一下，听一条动态。按住中间，说出你想分享的话，松开就发布。向左滑，回到创作。" },
 };
 let speakGlow = null;
-let welcomed = false;
 
 function orient(view, { speak = true } = {}) {
   const place = PLACES[view] || PLACES.studio;
@@ -105,12 +104,7 @@ function orient(view, { speak = true } = {}) {
   if (line) line.textContent = place.say;
   document.body.dataset.place = view;
   if (!speak) return;
-  const first = state.role === "blind" && !welcomed;
-  welcomed = true;
-  const text = first
-    ? `欢迎来到心绘。左右滑动换房间。滑到哪一间，会先报名字。${place.say}`
-    : place.say;
-  announce(text);
+  announce(`进入${place.name}模块`);
 }
 
 function setCaption(text) {
@@ -262,10 +256,7 @@ function bindDeck() {
     const index = Math.max(0, Math.min(TRACK.length - 1, indexNow()));
     if (index !== passed && TRACK[index]) {
       passed = index;
-      const name = PLACES[TRACK[index]].name;
       window.ArtMindVoid?.setRoom(TRACK[index]);
-      setCaption(name);
-      if (state.role !== "deaf") window.ArtMindAudio?.speak(name);
     }
     clearTimeout(settleTimer);
     settleTimer = setTimeout(() => {
@@ -277,11 +268,14 @@ function bindDeck() {
         deck.style.scrollBehavior = "auto";
         deck.style.scrollSnapType = "none";
         deck.scrollLeft = dest * deck.clientWidth;
+        void deck.offsetWidth;
         passed = dest;
         requestAnimationFrame(() => {
-          deck.style.scrollBehavior = "";
-          deck.style.scrollSnapType = "";
-          jumping = false;
+          requestAnimationFrame(() => {
+            deck.style.scrollBehavior = "";
+            deck.style.scrollSnapType = "";
+            jumping = false;
+          });
         });
         if (view !== state.view) switchView(view, { scroll: false });
         return;
@@ -375,12 +369,38 @@ function releaseHoldRecording() {
   });
 }
 
+function clearTextSelection() {
+  const selection = window.getSelection?.();
+  if (!selection || !selection.rangeCount) return;
+  const node = selection.anchorNode;
+  const field = node && (node.nodeType === 1 ? node : node.parentElement)?.closest?.("input, textarea");
+  if (field) return;
+  selection.removeAllRanges();
+}
+
+function blockMobileSelection() {
+  const inField = (event) => event.target.closest?.("input, textarea");
+  document.addEventListener("selectstart", (event) => {
+    if (inField(event)) return;
+    event.preventDefault();
+  });
+  document.addEventListener("contextmenu", (event) => {
+    if (inField(event)) return;
+    event.preventDefault();
+  });
+  document.addEventListener("selectionchange", () => {
+    if (document.activeElement?.closest?.("input, textarea")) return;
+    clearTextSelection();
+  });
+}
+
 function bindHoldMic(button, onText) {
   let holding = false;
   const start = async (event) => {
     if (holding || button.disabled) return;
     holding = true;
     event.preventDefault();
+    clearTextSelection();
     try { button.setPointerCapture(event.pointerId); } catch {}
     button.classList.add("holding");
     window.ArtMindVoid?.setHolding(true);
@@ -425,7 +445,7 @@ function renderStudioRoom() {
         <strong>${state.generating ? "请稍候" : "麦克风"}</strong>
         <small>${state.generating ? "正在画" : "按住说话"}</small>
       </button>
-      <p class="room-hint">向左滑，去疗愈</p>
+      <p class="room-hint">左右滑动，换模块</p>
     </div>`;
   const mic = el.querySelector("#hold-mic");
   window.ArtMindVoid?.setBusy(state.generating);
@@ -475,7 +495,7 @@ function renderTaskLobby() {
         <strong>开始</strong>
         <small>${next.minutes} 分钟</small>
       </button>
-      <p class="room-hint">上下滑动换练习 · 向左滑去欣赏</p>
+      <p class="room-hint">上下滑动换练习 · 左右滑动换模块</p>
     </div>`;
   el.querySelector("#task-go").addEventListener("click", () => {
     startTask(next);
@@ -506,7 +526,7 @@ function renderGalleryRoom() {
       <div class="room-visual art-hit" id="art-stage" aria-label="${escapeHTML(art.title)}，上下滑动换一幅">
         <img src="${art.image}" alt="${escapeHTML(art.alt)}" />
       </div>
-      <p class="room-hint">上下滑动换一幅，并听解说</p>
+      <p class="room-hint">上下滑动换一幅 · 左右滑动换模块</p>
     </div>`;
 }
 
@@ -568,7 +588,7 @@ function renderCommunityRoom() {
         <strong>${state.role === "parent" ? "听一条" : "听 / 说"}</strong>
         <small>${state.role === "parent" ? "下一条" : "点一下听，按住说"}</small>
       </button>
-      <p class="room-hint">向左滑，回到创作</p>
+      <p class="room-hint">左右滑动，换模块</p>
     </div>`;
   const button = el.querySelector("#community-go");
   let timer = null;
@@ -576,6 +596,7 @@ function renderCommunityRoom() {
   button.addEventListener("pointerdown", (event) => {
     if (state.role === "parent") return;
     event.preventDefault();
+    clearTextSelection();
     holding = false;
     timer = setTimeout(async () => {
       holding = true;
@@ -2556,6 +2577,7 @@ async function init() {
     switchDesktopView("studio");
     return;
   }
+  blockMobileSelection();
   window.ArtMindVoid?.start();
   window.ArtMindVoid?.setRoom("studio");
   const deck = document.getElementById("main");
