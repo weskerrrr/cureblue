@@ -579,8 +579,8 @@ html[data-shell="mobile"] textarea {
 .room-dots span { width: 7px; height: 7px; border-radius: 99px; background: rgba(243,238,228,.28); }
 .room-dots span.on { width: 22px; background: var(--primary); }
 .deck {
-  display: flex; height: 100dvh; overflow-x: auto; overflow-y: hidden;
-  scroll-snap-type: x mandatory; scroll-behavior: smooth; touch-action: pan-x;
+  display: flex; height: 100dvh; overflow-x: hidden; overflow-y: hidden;
+  scroll-behavior: auto; touch-action: pan-y;
   perspective: none; padding: 0;
 }
 .deck::-webkit-scrollbar { display: none; }
@@ -609,7 +609,7 @@ html[data-shell="mobile"] textarea {
   width: min(100%, 420px); min-height: 168px; margin: 8px 0 12px; padding: 16px;
   border-radius: 28px; border: 1px solid rgba(231, 194, 122, .7);
   background: rgba(231, 194, 122, .1); display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 6px; touch-action: none;
+  align-items: center; justify-content: center; gap: 6px; touch-action: pan-y;
   -webkit-user-select: none; user-select: none;
 }
 .exercise-swipe p { margin: 0; color: #e7c27a; letter-spacing: .08em; }

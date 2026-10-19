@@ -132,10 +132,28 @@ export async function arkSpeak(env, text) {
   return bytesToBase64(bytes);
 }
 
-export async function arkTranscribe(env, b64, mime = "audio/webm") {
-  const format = String(mime).replace(/^audio\//, "").split(";")[0] || "webm";
+function audioMime(mime) {
+  const raw = String(mime || "").toLowerCase().split(";")[0].trim();
+  if (raw === "audio/wave" || raw === "audio/x-wav") return "audio/wav";
+  if (raw === "audio/mp3") return "audio/mpeg";
+  if (raw === "audio/m4a" || raw === "audio/x-m4a" || raw === "audio/aac") return "audio/mp4";
+  return raw || "audio/wav";
+}
+
+function transcriptText(data) {
+  const parts = [];
+  for (const item of data?.output || []) {
+    for (const part of item?.content || []) {
+      if (part?.text) parts.push(String(part.text));
+    }
+  }
+  return parts.join("").replace(/^转写[:：]\s*/, "").trim();
+}
+
+export async function arkTranscribe(env, b64, mime = "audio/wav") {
   const model = envValue(env.ARK_ASR_MODEL) || "doubao-seed-2-1-lite-260915";
-  const res = await fetch(`${ARK}/chat/completions`, {
+  const type = audioMime(mime);
+  const res = await fetch(`${ARK}/responses`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${envValue(env.ARK_API_KEY)}`,
@@ -143,12 +161,14 @@ export async function arkTranscribe(env, b64, mime = "audio/webm") {
     },
     body: JSON.stringify({
       model,
-      messages: [
+      instructions: "你是中文语音识别器。只输出说话人的原话，不要解释，不要加引号。没有人声时输出空字符串。",
+      input: [
         {
+          type: "message",
           role: "user",
           content: [
-            { type: "input_audio", input_audio: { data: b64, format } },
-            { type: "text", text: "请把这段语音转写成中文。只输出转写文字，不要解释。" },
+            { type: "input_audio", audio_url: `data:${type};base64,${b64}` },
+            { type: "input_text", text: "转写：" },
           ],
         },
       ],
@@ -156,8 +176,7 @@ export async function arkTranscribe(env, b64, mime = "audio/webm") {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`方舟识别失败：${arkError(data, res.status)}`);
-  const text = data?.choices?.[0]?.message?.content;
-  const clean = String(text || "").trim();
+  const clean = transcriptText(data);
   if (!clean) throw new Error("方舟识别失败：没有识别出文字。");
   return clean;
 }

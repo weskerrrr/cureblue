@@ -252,43 +252,55 @@ function syncClones() {
 function bindDeck() {
   const deck = document.getElementById("main");
   if (!deck) return;
-  let passed = 1;
-  let settleTimer = null;
   let jumping = false;
-  const indexNow = () => Math.round(deck.scrollLeft / Math.max(1, deck.clientWidth));
-  deck.addEventListener("scroll", () => {
-    if (jumping) return;
-    const index = Math.max(0, Math.min(TRACK.length - 1, indexNow()));
-    if (index !== passed && TRACK[index]) {
-      passed = index;
-      window.ArtMindVoid?.setRoom(TRACK[index]);
+  const width = () => Math.max(1, deck.clientWidth || window.innerWidth);
+  const indexNow = () => Math.round(deck.scrollLeft / width());
+  const placeAt = (index) => {
+    jumping = true;
+    deck.style.scrollBehavior = "auto";
+    deck.scrollLeft = index * width();
+    requestAnimationFrame(() => { jumping = false; });
+  };
+
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+  let axis = "";
+  const onHold = (target) => target?.closest?.(".hold-mic, .paint-canvas, input, textarea, select");
+  deck.addEventListener("touchstart", (event) => {
+    if (event.touches.length !== 1 || onHold(event.target)) {
+      tracking = false;
+      return;
     }
-    clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => {
-      const index = Math.max(0, Math.min(TRACK.length - 1, indexNow()));
-      if (index === 0 || index === TRACK.length - 1) {
-        const view = index === 0 ? "community" : "studio";
-        const dest = trackIndex(view);
-        jumping = true;
-        deck.style.scrollBehavior = "auto";
-        deck.style.scrollSnapType = "none";
-        deck.scrollLeft = dest * deck.clientWidth;
-        void deck.offsetWidth;
-        passed = dest;
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            deck.style.scrollBehavior = "";
-            deck.style.scrollSnapType = "";
-            jumping = false;
-          });
-        });
-        if (view !== state.view) switchView(view, { scroll: false });
-        return;
-      }
-      const view = TRACK[index];
-      if (view && view !== state.view) switchView(view, { scroll: false });
-    }, 140);
+    tracking = true;
+    axis = "";
+    startX = event.touches[0].clientX;
+    startY = event.touches[0].clientY;
   }, { passive: true });
+  deck.addEventListener("touchmove", (event) => {
+    if (!tracking || event.touches.length !== 1) return;
+    const dx = event.touches[0].clientX - startX;
+    const dy = event.touches[0].clientY - startY;
+    if (!axis && (Math.abs(dx) > 12 || Math.abs(dy) > 12)) {
+      axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+    }
+    if (axis === "x" && event.cancelable) event.preventDefault();
+  }, { passive: false });
+  deck.addEventListener("touchend", (event) => {
+    if (!tracking) return;
+    tracking = false;
+    const point = event.changedTouches?.[0];
+    if (!point || axis !== "x") return;
+    const dx = point.clientX - startX;
+    const dy = point.clientY - startY;
+    if (Math.abs(dx) < 36 || Math.abs(dx) < Math.abs(dy)) return;
+    const dest = Math.max(0, Math.min(TRACK.length - 1, indexNow() + (dx < 0 ? 1 : -1)));
+    const looping = dest === 0 || dest === TRACK.length - 1;
+    const view = looping ? (dest === 0 ? "community" : "studio") : TRACK[dest];
+    placeAt(looping ? trackIndex(view) : dest);
+    if (view && view !== state.view) switchView(view, { scroll: false });
+  });
+  deck.addEventListener("touchcancel", () => { tracking = false; });
 }
 
 let lastVerticalSwipeAt = 0;
@@ -897,8 +909,57 @@ function blobToDataUrl(blob) {
   });
 }
 
+function pcmToWav(samples, rate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const write = (offset, text) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  write(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  write(8, "WAVE");
+  write(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  write(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+async function recordingToWav(blob) {
+  const ctx = new AudioContext();
+  try {
+    const decoded = await ctx.decodeAudioData((await blob.arrayBuffer()).slice(0));
+    const rate = 16000;
+    const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+    const source = offline.createBufferSource();
+    source.buffer = decoded;
+    source.connect(offline.destination);
+    source.start();
+    const rendered = await offline.startRendering();
+    return pcmToWav(rendered.getChannelData(0), rate);
+  } finally {
+    ctx.close?.();
+  }
+}
+
 async function transcribeRecording(blob) {
-  const audio = await blobToDataUrl(blob);
+  let payload = blob;
+  try {
+    payload = await recordingToWav(blob);
+  } catch {}
+  const audio = await blobToDataUrl(payload);
   const res = await fetch("/api/stt", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
