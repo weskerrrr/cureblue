@@ -104,7 +104,8 @@ function orient(view, { speak = true } = {}) {
   if (line) line.textContent = place.say;
   document.body.dataset.place = view;
   if (!speak) return;
-  announce(`进入${place.name}模块`);
+  window.ArtMindAudio?.stopSpeech();
+  announce(`${place.name}模块`);
 }
 
 function setCaption(text) {
@@ -220,6 +221,10 @@ function switchView(view, { scroll = true } = {}) {
   if (view !== "tasks") {
     runTaskCleanup();
     window.ArtMindAudio?.stopFx();
+    if (state.activeTask) {
+      state.activeTask = null;
+      renderTaskLobby();
+    }
   }
   state.view = view;
   window.ArtMindVoid?.setRoom(view);
@@ -286,6 +291,12 @@ function bindDeck() {
   }, { passive: true });
 }
 
+let lastVerticalSwipeAt = 0;
+
+function recentVerticalSwipe() {
+  return Date.now() - lastVerticalSwipeAt < 500;
+}
+
 function bindVerticalCycle(el, onDelta) {
   if (!el) return;
   let startX = 0;
@@ -305,7 +316,8 @@ function bindVerticalCycle(el, onDelta) {
     tracking = false;
     const dx = event.clientX - startX;
     const dy = event.clientY - startY;
-    if (Math.abs(dy) < 56 || Math.abs(dy) < Math.abs(dx) * 1.2) return;
+    if (Math.abs(dy) < 42 || Math.abs(dy) < Math.abs(dx) * 1.15) return;
+    lastVerticalSwipeAt = Date.now();
     const button = event.target.closest("button");
     if (button) {
       const stop = (click) => {
@@ -339,7 +351,10 @@ function releaseHoldRecording() {
   return new Promise((resolve) => {
     const session = promptRec;
     if (!session || session.pending || !session.recorder) {
-      if (session?.pending) promptRec = null;
+      if (session?.pending) {
+        promptRec = null;
+        announce("麦克风还在准备，请按住稍等，听到提示后再说。", { assertive: true });
+      }
       resolve("");
       return;
     }
@@ -397,11 +412,11 @@ function blockMobileSelection() {
 function bindHoldMic(button, onText) {
   let holding = false;
   const start = async (event) => {
+    if (event?.cancelable) event.preventDefault();
     if (holding || button.disabled) return;
+    if (event?.pointerType === "touch") return;
     holding = true;
-    event.preventDefault();
     clearTextSelection();
-    try { button.setPointerCapture(event.pointerId); } catch {}
     button.classList.add("holding");
     window.ArtMindVoid?.setHolding(true);
     const deck = document.getElementById("main");
@@ -409,9 +424,15 @@ function bindHoldMic(button, onText) {
     window.ArtMindAudio?.stopSpeech();
     setCaption("正在听。说完松开。");
     buzz(18);
-    await startMicPrompt();
+    await startMicPrompt({ hold: true });
   };
-  const end = async () => {
+  const beginTouch = (event) => {
+    if (event.cancelable) event.preventDefault();
+    clearTextSelection();
+    start({ pointerType: "mouse" });
+  };
+  const end = async (event) => {
+    if (event?.cancelable) event.preventDefault();
     if (!holding) return;
     holding = false;
     button.classList.remove("holding");
@@ -421,9 +442,13 @@ function bindHoldMic(button, onText) {
     const text = (await releaseHoldRecording()).trim();
     if (text) onText(text);
   };
+  button.addEventListener("touchstart", beginTouch, { passive: false });
+  button.addEventListener("touchend", end, { passive: false });
   button.addEventListener("pointerdown", start);
-  button.addEventListener("pointerup", end);
-  button.addEventListener("pointercancel", end);
+  button.addEventListener("pointerup", (event) => {
+    if (event.pointerType === "touch") return;
+    end(event);
+  });
 }
 
 function renderStudioRoom() {
@@ -480,25 +505,46 @@ function stepTask(delta) {
   state.taskIndex += delta;
   const task = currentTask();
   renderTaskLobby();
-  announce(`${task.title}。${task.desc}。点中间开始。`);
+  const total = state.tasks.length;
+  const index = state.taskIndex + 1;
+  announce(`第 ${index} 个练习，${task.title}。在中间上下滑动可以换练习。`);
+  return { task, index, total };
+}
+
+function exerciseSwitcher(index, total) {
+  return `
+    <div class="exercise-swipe" aria-label="上下滑动换练习">
+      <button type="button" class="exercise-step" data-task-step="-1">上一个练习</button>
+      <p>在这里上下滑动</p>
+      <strong>${index} / ${total}</strong>
+      <button type="button" class="exercise-step" data-task-step="1">下一个练习</button>
+    </div>`;
 }
 
 function renderTaskLobby() {
   const el = document.getElementById("view-tasks");
+  if (!el) return;
   const next = currentTask();
+  const total = state.tasks.length;
+  const index = state.taskIndex + 1;
   el.innerHTML = `
     <div class="room-stage">
-      <p class="room-kicker">疗愈</p>
+      <p class="room-kicker">疗愈 · ${index} / ${total}</p>
       <h1>${escapeHTML(next.title)}</h1>
       <p class="room-lead">${escapeHTML(next.desc)}</p>
+      ${exerciseSwitcher(index, total)}
       <button type="button" class="hold-mic act" id="task-go">
         <strong>开始</strong>
         <small>${next.minutes} 分钟</small>
       </button>
-      <p class="room-hint">上下滑动换练习 · 左右滑动换模块</p>
+      <p class="room-hint">左右滑动换模块</p>
     </div>`;
   el.querySelector("#task-go").addEventListener("click", () => {
+    if (recentVerticalSwipe()) return;
     startTask(next);
+  });
+  el.querySelectorAll("[data-task-step]").forEach((button) => {
+    button.addEventListener("click", () => stepTask(Number(button.dataset.taskStep)));
   });
 }
 
@@ -523,11 +569,18 @@ function renderGalleryRoom() {
     <div class="room-stage">
       <p class="room-kicker">欣赏 · ${state.artIndex + 1} / ${arts.length}</p>
       <h1>${escapeHTML(art.title)}</h1>
-      <div class="room-visual art-hit" id="art-stage" aria-label="${escapeHTML(art.title)}，上下滑动换一幅">
+      <button type="button" class="room-visual art-hit" id="art-stage" aria-label="点一下，听${escapeHTML(art.title)}的解说">
         <img src="${art.image}" alt="${escapeHTML(art.alt)}" />
-      </div>
-      <p class="room-hint">上下滑动换一幅 · 左右滑动换模块</p>
+      </button>
+      <button type="button" class="listen-hit" id="art-listen">听解说</button>
+      <p class="room-hint">点画面听解说 · 上下滑动换一幅 · 左右滑动换模块</p>
     </div>`;
+  const tell = () => {
+    if (recentVerticalSwipe()) return;
+    narrateArtwork(art);
+  };
+  el.querySelector("#art-stage").addEventListener("click", tell);
+  el.querySelector("#art-listen").addEventListener("click", tell);
 }
 
 function renderGalleryFocus() {
@@ -593,6 +646,10 @@ function renderCommunityRoom() {
   const button = el.querySelector("#community-go");
   let timer = null;
   let holding = false;
+  button.addEventListener("touchstart", (event) => {
+    if (event.cancelable) event.preventDefault();
+    clearTextSelection();
+  }, { passive: false });
   button.addEventListener("pointerdown", (event) => {
     if (state.role === "parent") return;
     event.preventDefault();
@@ -952,7 +1009,7 @@ function startNativePrompt() {
   }
 }
 
-async function startMicPrompt() {
+async function startMicPrompt(options = {}) {
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
     announce("当前浏览器不支持录音，请直接打字描述画面。", { assertive: true });
     return;
@@ -983,6 +1040,7 @@ async function startMicPrompt() {
   };
   promptRec = { stream, recorder, chunks, timer: null, busy: false };
   recorder.start(250);
+  if (options.hold) return;
   setVoiceButton("🔴 正在说… 再点结束", { listening: true });
   setCaption("请说出你想画的内容，说完再点一下结束。");
   promptRec.timer = setTimeout(() => finishPromptRecording(), 12000);
@@ -1195,7 +1253,16 @@ function renderTasks() {
       return;
     }
     const stageHost = document.getElementById("view-tasks");
-    stageHost.innerHTML = `<section class="room-stage task-live" id="task-stage" aria-live="polite"></section>`;
+    const index = state.taskIndex + 1;
+    const total = state.tasks.length;
+    stageHost.innerHTML = `
+      <section class="room-stage task-live">
+        ${exerciseSwitcher(index, total)}
+        <div id="task-stage" aria-live="polite"></div>
+      </section>`;
+    stageHost.querySelectorAll("[data-task-step]").forEach((button) => {
+      button.addEventListener("click", () => stepTask(Number(button.dataset.taskStep)));
+    });
     renderTaskStage(stageHost.querySelector("#task-stage"));
     return;
   }
@@ -1558,6 +1625,7 @@ const TASK_RENDER = {
     const text = body.querySelector("#bubble-text");
     const MIN_HOLD = 3000;
     let start = 0;
+    let origin = null;
     let ticker = null;
     let later = null;
     let releaseCue = false;
@@ -1580,6 +1648,7 @@ const TASK_RENDER = {
     const begin = (e) => {
       e?.preventDefault();
       if (start || at.rounds >= at.goal) return;
+      origin = { x: e.clientX || 0, y: e.clientY || 0 };
       clearTimeout(later);
       start = Date.now();
       releaseCue = false;
@@ -1603,8 +1672,20 @@ const TASK_RENDER = {
       }, 250);
     };
 
-    const finish = () => {
+    const finish = (e) => {
       if (!start) return;
+      if (origin && e?.clientY != null) {
+        const dy = e.clientY - origin.y;
+        const dx = (e.clientX || 0) - origin.x;
+        if (Math.abs(dy) > 42 && Math.abs(dy) > Math.abs(dx)) {
+          start = 0;
+          origin = null;
+          clearInterval(ticker);
+          Haptics?.stopRhythm();
+          window.ArtMindAudio?.stopFx();
+          return;
+        }
+      }
       const held = Date.now() - start;
       start = 0;
       clearInterval(ticker);
@@ -1632,6 +1713,10 @@ const TASK_RENDER = {
       }
     };
 
+    bubble.addEventListener("touchstart", (event) => {
+      if (event.cancelable) event.preventDefault();
+      clearTextSelection();
+    }, { passive: false });
     bubble.addEventListener("pointerdown", begin);
     ["pointerup", "pointerleave", "pointercancel"].forEach((type) => bubble.addEventListener(type, finish));
     bubble.addEventListener("contextmenu", (e) => e.preventDefault());

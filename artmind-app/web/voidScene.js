@@ -227,11 +227,7 @@ function makeForms() {
   );
   forms.tasks = breath;
 
-  const frame = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.PlaneGeometry(1.25, 0.92)),
-    new THREE.LineBasicMaterial({ color: 0xe7c27a, transparent: true, opacity: 0.9 }),
-  );
-  forms.gallery = frame;
+  forms.gallery = new THREE.Group();
 
   const cluster = new THREE.Group();
   for (let i = 0; i < 18; i += 1) {

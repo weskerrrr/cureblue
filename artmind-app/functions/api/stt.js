@@ -58,7 +58,16 @@ export async function onRequestPost({ request, env }) {
   if (bytes > MAX_BYTES) return error("录音太长，请说得短一些。", 413);
 
   try {
-    const text = env.ARK_API_KEY ? await arkTranscribe(env, b64, mime) : await transcribe(env, b64);
+    let text = "";
+    if (env.ARK_API_KEY) {
+      try {
+        text = await arkTranscribe(env, b64, mime);
+      } catch (err) {
+        console.error("[stt]", err?.message || err);
+      }
+    }
+    if (!text && env.AI) text = await transcribe(env, b64);
+    if (!text) throw new Error("empty-stt-text");
     return json({ ok: true, text });
   } catch (err) {
     console.error("[stt]", err?.message || err);
