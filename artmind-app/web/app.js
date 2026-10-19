@@ -96,6 +96,10 @@ const PLACES = {
 };
 let speakGlow = null;
 
+const WELCOME = "欢迎来到心绘，左右滑动可以达到不同的模块";
+let welcomeSaid = false;
+let welcomeAt = 0;
+
 function orient(view, { speak = true } = {}) {
   const place = PLACES[view] || PLACES.studio;
   const kicker = document.getElementById("now-kicker");
@@ -103,9 +107,30 @@ function orient(view, { speak = true } = {}) {
   if (kicker) kicker.textContent = place.name;
   if (line) line.textContent = place.say;
   document.body.dataset.place = view;
-  if (!speak) return;
+  if (!speak || !welcomeSaid) return;
   window.ArtMindAudio?.stopSpeech();
   announce(`${place.name}模块`);
+}
+
+function speakWelcome() {
+  setCaption(WELCOME);
+  const play = () => {
+    if (welcomeSaid) return;
+    welcomeSaid = true;
+    welcomeAt = Date.now();
+    window.ArtMindAudio?.unlock?.();
+    announce(WELCOME);
+  };
+  const audio = window.ArtMindAudio;
+  if (audio?.isMobile && !audio.unlocked) {
+    const once = () => {
+      document.removeEventListener("pointerdown", once, true);
+      play();
+    };
+    document.addEventListener("pointerdown", once, true);
+    return;
+  }
+  play();
 }
 
 function setCaption(text) {
@@ -209,7 +234,7 @@ function switchDesktopView(view) {
   announce("已打开" + labels[view]);
 }
 
-function switchView(view, { scroll = true } = {}) {
+function switchView(view, { scroll = true, speak = true } = {}) {
   if (!isMobileShell()) {
     switchDesktopView(view);
     return;
@@ -231,7 +256,7 @@ function switchView(view, { scroll = true } = {}) {
   renderView(view);
   updateRoomChrome();
   if (scroll) scrollToRoom(view);
-  orient(view);
+  orient(view, { speak });
   syncClones();
 }
 
@@ -249,58 +274,108 @@ function syncClones() {
   mirror(studio, after);
 }
 
+let roomSwipe = false;
+let lastRoomStep = 0;
+
 function bindDeck() {
   const deck = document.getElementById("main");
   if (!deck) return;
-  let jumping = false;
   const width = () => Math.max(1, deck.clientWidth || window.innerWidth);
-  const indexNow = () => Math.round(deck.scrollLeft / width());
+  const indexNow = () => {
+    const index = Math.round(deck.scrollLeft / width());
+    if (TRACK[index]) return index;
+    return trackIndex(state.view || "studio");
+  };
   const placeAt = (index) => {
-    jumping = true;
     deck.style.scrollBehavior = "auto";
     deck.scrollLeft = index * width();
-    requestAnimationFrame(() => { jumping = false; });
+  };
+  const stepRoom = (direction) => {
+    const now = Date.now();
+    if (now - lastRoomStep < 420) return;
+    lastRoomStep = now;
+    const dest = Math.max(0, Math.min(TRACK.length - 1, indexNow() + direction));
+    const looping = dest === 0 || dest === TRACK.length - 1;
+    const view = looping ? (dest === 0 ? "community" : "studio") : TRACK[dest];
+    placeAt(looping ? trackIndex(view) : dest);
+    const first = !welcomeSaid || Date.now() - welcomeAt < 1600;
+    if (view && view !== state.view) switchView(view, { scroll: false, speak: !first });
+    if (!welcomeSaid) {
+      welcomeSaid = true;
+      welcomeAt = Date.now();
+      setCaption(WELCOME);
+      announce(WELCOME);
+    }
   };
 
   let startX = 0;
   let startY = 0;
   let tracking = false;
   let axis = "";
-  const onHold = (target) => target?.closest?.(".hold-mic, .paint-canvas, input, textarea, select");
-  deck.addEventListener("touchstart", (event) => {
-    if (event.touches.length !== 1 || onHold(event.target)) {
+  const skip = (target) => target?.closest?.("input, textarea, select, .paint-canvas");
+  const begin = (x, y, target) => {
+    if (skip(target)) {
       tracking = false;
       return;
     }
     tracking = true;
     axis = "";
-    startX = event.touches[0].clientX;
-    startY = event.touches[0].clientY;
-  }, { passive: true });
-  deck.addEventListener("touchmove", (event) => {
-    if (!tracking || event.touches.length !== 1) return;
-    const dx = event.touches[0].clientX - startX;
-    const dy = event.touches[0].clientY - startY;
-    if (!axis && (Math.abs(dx) > 12 || Math.abs(dy) > 12)) {
-      axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+    roomSwipe = false;
+    startX = x;
+    startY = y;
+  };
+  const move = (x, y, event) => {
+    if (!tracking) return;
+    const dx = x - startX;
+    const dy = y - startY;
+    if (!axis && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+      axis = Math.abs(dx) > Math.abs(dy) * 0.8 ? "x" : "y";
     }
-    if (axis === "x" && event.cancelable) event.preventDefault();
-  }, { passive: false });
-  deck.addEventListener("touchend", (event) => {
+    if (axis !== "x") return;
+    roomSwipe = true;
+    if (event.cancelable) event.preventDefault();
+  };
+  const finish = (x, y) => {
     if (!tracking) return;
     tracking = false;
+    const dx = x - startX;
+    const dy = y - startY;
+    if (Math.abs(dx) < 24 || Math.abs(dx) < Math.abs(dy)) {
+      roomSwipe = false;
+      return;
+    }
+    roomSwipe = true;
+    stepRoom(dx < 0 ? 1 : -1);
+  };
+
+  document.addEventListener("touchstart", (event) => {
+    if (event.touches.length !== 1) return;
+    const point = event.touches[0];
+    begin(point.clientX, point.clientY, event.target);
+  }, { capture: true, passive: true });
+  document.addEventListener("touchmove", (event) => {
+    if (!tracking || event.touches.length !== 1) return;
+    const point = event.touches[0];
+    move(point.clientX, point.clientY, event);
+  }, { capture: true, passive: false });
+  document.addEventListener("touchend", (event) => {
     const point = event.changedTouches?.[0];
-    if (!point || axis !== "x") return;
-    const dx = point.clientX - startX;
-    const dy = point.clientY - startY;
-    if (Math.abs(dx) < 36 || Math.abs(dx) < Math.abs(dy)) return;
-    const dest = Math.max(0, Math.min(TRACK.length - 1, indexNow() + (dx < 0 ? 1 : -1)));
-    const looping = dest === 0 || dest === TRACK.length - 1;
-    const view = looping ? (dest === 0 ? "community" : "studio") : TRACK[dest];
-    placeAt(looping ? trackIndex(view) : dest);
-    if (view && view !== state.view) switchView(view, { scroll: false });
-  });
-  deck.addEventListener("touchcancel", () => { tracking = false; });
+    if (!point) return;
+    finish(point.clientX, point.clientY);
+  }, { capture: true });
+  document.addEventListener("touchcancel", (event) => {
+    const point = event.changedTouches?.[0];
+    if (point && axis === "x") finish(point.clientX, point.clientY);
+    else tracking = false;
+  }, { capture: true });
+
+  const bindPeek = (id, direction) => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.addEventListener("click", () => stepRoom(direction));
+  };
+  bindPeek("peek-left", -1);
+  bindPeek("peek-right", 1);
 }
 
 let lastVerticalSwipeAt = 0;
@@ -438,19 +513,34 @@ function bindHoldMic(button, onText) {
     buzz(18);
     await startMicPrompt({ hold: true });
   };
+  let arm = 0;
   const beginTouch = (event) => {
     if (event.cancelable) event.preventDefault();
     clearTextSelection();
-    start({ pointerType: "mouse" });
+    clearTimeout(arm);
+    arm = setTimeout(() => {
+      if (roomSwipe) return;
+      start({ pointerType: "mouse" });
+    }, 240);
   };
   const end = async (event) => {
     if (event?.cancelable) event.preventDefault();
+    clearTimeout(arm);
+    if (roomSwipe) {
+      holding = false;
+      button.classList.remove("holding");
+      window.ArtMindVoid?.setHolding(false);
+      cancelPromptRecording();
+      return;
+    }
     if (!holding) return;
     holding = false;
     button.classList.remove("holding");
     window.ArtMindVoid?.setHolding(false);
     const deck = document.getElementById("main");
     if (deck) deck.style.overflowX = "";
+    setCaption("已松开麦克风，即将进入创作");
+    announce("已松开麦克风，即将进入创作");
     const text = (await releaseHoldRecording()).trim();
     if (text) onText(text);
   };
@@ -500,7 +590,7 @@ function renderStudioRoom() {
     state.artPrompt = text;
     const input = document.getElementById("prompt");
     if (input) input.value = text;
-    announce(`我听到了：${text}`);
+    setCaption(text);
     runAI("image");
   });
 }
@@ -2742,10 +2832,6 @@ async function init() {
     stepArt(delta);
   });
 
-  if (window.ArtMindAudio?.isMobile && !window.ArtMindAudio.unlocked) {
-    setCaption("手机上请先轻触一下屏幕，语音和背景音才能播放。");
-  }
-
   await bootstrapBackend();
   ROOMS.forEach((view) => renderView(view));
   syncClones();
@@ -2756,7 +2842,8 @@ async function init() {
   }
   state.view = "studio";
   updateRoomChrome();
-  orient("studio");
+  orient("studio", { speak: false });
+  speakWelcome();
 }
 
 document.addEventListener("DOMContentLoaded", init);

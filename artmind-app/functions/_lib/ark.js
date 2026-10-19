@@ -42,7 +42,7 @@ function arkError(data, status) {
 export async function arkImage(env, prompt, styleId = "auto") {
   const scene = String(prompt || "").trim().slice(0, 280);
   const style = STYLE_ZH[styleId] || STYLE_ZH.auto;
-  const model = envValue(env.ARK_IMAGE_MODEL) || "doubao-seedream-5-0-pro-260628";
+  const model = envValue(env.ARK_IMAGE_MODEL) || "doubao-seedream-5-0-flash-260915";
   const res = await fetch(`${ARK}/images/generations`, {
     method: "POST",
     headers: {
@@ -52,7 +52,7 @@ export async function arkImage(env, prompt, styleId = "auto") {
     body: JSON.stringify({
       model,
       prompt: `${scene}。${style}。`,
-      size: envValue(env.ARK_IMAGE_SIZE) || "2K",
+      size: envValue(env.ARK_IMAGE_SIZE) || "1K",
       response_format: "b64_json",
       output_format: "jpeg",
       watermark: false,

@@ -215,14 +215,15 @@ function makeForms() {
   forms.studio = mic;
 
   const breath = new THREE.Mesh(
-    new THREE.SphereGeometry(0.72, 40, 40),
+    new THREE.SphereGeometry(0.72, 48, 48),
     new THREE.MeshPhysicalMaterial({
-      color: 0x2a1c4a,
-      emissive: 0x8d7cff,
-      emissiveIntensity: 0.45,
-      roughness: 0.18,
+      color: 0xf0c14b,
+      emissive: 0xc8892d,
+      emissiveIntensity: 0.62,
+      roughness: 0.28,
+      metalness: 0.12,
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.94,
     }),
   );
   forms.tasks = breath;

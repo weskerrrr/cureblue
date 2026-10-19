@@ -20,5 +20,5 @@ binding = "AI"
 
 # 生图模型。密钥 ARK_API_KEY 只放在 Pages Secret，不写进仓库。
 [vars]
-ARK_IMAGE_MODEL = "doubao-seedream-5-0-pro-260628"
-ARK_IMAGE_SIZE = "2K"
+ARK_IMAGE_MODEL = "doubao-seedream-5-0-flash-260915"
+ARK_IMAGE_SIZE = "1K"

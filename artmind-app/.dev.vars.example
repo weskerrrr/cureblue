@@ -1,7 +1,7 @@
 # 复制为 .dev.vars 后填入密钥。.dev.vars 已被 git 忽略，不要把密钥写进聊天或提交。
 ARK_API_KEY=
-ARK_IMAGE_MODEL=doubao-seedream-5-0-pro-260628
-ARK_IMAGE_SIZE=2K
+ARK_IMAGE_MODEL=doubao-seedream-5-0-flash-260915
+ARK_IMAGE_SIZE=1K
 ARK_TTS_RESOURCE=seed-tts-2.0
 ARK_TTS_SPEAKER=zh_female_vv_uranus_bigtts
 ARK_ASR_MODEL=doubao-seed-2-1-lite-260915
