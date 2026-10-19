@@ -114,26 +114,14 @@ function orient(view, { speak = true } = {}) {
 
 function speakWelcome() {
   setCaption(WELCOME);
+  if (state.role === "deaf") return;
   const audio = window.ArtMindAudio;
-  let welcomePlaying = false;
-  const finish = () => {
+  audio?.onSpoken?.((text) => {
+    if (welcomeSaid || text !== WELCOME) return;
     welcomeSaid = true;
     welcomeAt = Date.now();
-    document.removeEventListener("touchend", attempt, true);
-    document.removeEventListener("pointerup", attempt, true);
-  };
-  const attempt = () => {
-    if (welcomeSaid || welcomePlaying || state.role === "deaf") return;
-    audio?.unlock?.();
-    const pending = audio?.playReady?.(WELCOME);
-    if (!pending) return;
-    welcomePlaying = true;
-    Promise.resolve(pending).then(finish).catch(() => { welcomePlaying = false; });
-  };
-  if (state.role === "deaf") return;
-  audio?.prime?.(WELCOME)?.then?.(() => attempt());
-  document.addEventListener("touchend", attempt, true);
-  document.addEventListener("pointerup", attempt, true);
+  });
+  audio?.armAutoplay?.(WELCOME);
 }
 
 function setCaption(text) {

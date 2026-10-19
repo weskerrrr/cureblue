@@ -16,6 +16,9 @@ window.ArtMindAudio = (() => {
   const MAX_TTS_LEN = 300;
 
   const voiceEl = createAudio();
+  voiceEl.playsInline = true;
+  voiceEl.volume = 1;
+  if (document.body) document.body.appendChild(voiceEl);
   const noiseEl = createAudio();
   noiseEl.loop = true;
   const fxEl = createAudio();
@@ -238,23 +241,59 @@ window.ArtMindAudio = (() => {
   }
 
   /* ---------------- 手机解锁 ---------------- */
+  let armedText = "";
+  let armingPlay = false;
+  const spokenHandlers = new Set();
+
+  function asPlayable(audio) {
+    if (!audio || !String(audio).startsWith("data:")) return audio;
+    try {
+      const comma = audio.indexOf(",");
+      const mime = audio.slice(5, comma).split(";")[0] || "audio/wav";
+      const binary = atob(audio.slice(comma + 1));
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return URL.createObjectURL(new Blob([bytes], { type: mime }));
+    } catch {
+      return audio;
+    }
+  }
+
+  function onSpoken(fn) {
+    spokenHandlers.add(fn);
+  }
+
+  function notifySpoken(text) {
+    spokenHandlers.forEach((fn) => {
+      try { fn(text); } catch {}
+    });
+  }
+
+  voiceEl.addEventListener("playing", () => {
+    if (!activeLine) return;
+    if (activeLine === armedText) armedText = "";
+    notifySpoken(activeLine);
+  });
+
+  function playArmed() {
+    if (!armedText || armingPlay || !ttsCache.has(armedText)) return null;
+    if (activeLine === armedText && !voiceEl.paused) return null;
+    return playReady(armedText);
+  }
+
   function unlock() {
+    playArmed()?.catch(() => {});
     if (unlocked) return;
     unlocked = true;
     const url = getSilentUrl();
-    for (const el of [voiceEl, noiseEl, fxEl]) {
+    for (const el of [noiseEl, fxEl]) {
       if (el.getAttribute("src")) continue;
       el.src = url;
       el.play().then(() => { if (el.src === url) el.pause(); }).catch(() => {});
     }
-    if (hasNativeTTS && isIOS) {
-      const u = new SpeechSynthesisUtterance(" ");
-      u.volume = 0;
-      window.speechSynthesis.speak(u);
-    }
   }
 
-  ["pointerdown", "touchend", "keydown"].forEach((type) =>
+  ["pointerdown", "touchstart", "touchend", "keydown"].forEach((type) =>
     document.addEventListener(type, unlock, { capture: true, passive: true }),
   );
 
@@ -290,8 +329,9 @@ window.ArtMindAudio = (() => {
       });
       const data = await res.json().catch(() => ({}));
       if (!data.ok || !data.audio) throw new Error(data.error || "tts-failed");
-      ttsCache.set(text, data.audio);
-      return data.audio;
+      const url = asPlayable(data.audio);
+      ttsCache.set(text, url);
+      return url;
     } catch (err) {
       if (attempt >= 1) throw err;
       await new Promise((r) => setTimeout(r, 600));
@@ -344,16 +384,52 @@ window.ArtMindAudio = (() => {
     return job;
   }
 
+  let activeLine = "";
+
   function playReady(text) {
     const clean = String(text || "").trim().slice(0, MAX_TTS_LEN);
     const src = ttsCache.get(clean);
-    if (!src) return null;
+    if (!src || armingPlay) return null;
+    if (activeLine === clean && !voiceEl.paused) return null;
+    armingPlay = true;
     stopSpeech();
     const token = speakToken;
+    activeLine = clean;
     voiceEl.src = src;
+    voiceEl.volume = 1;
     voiceEl.onended = () => { if (token === speakToken) duck(false); };
     duck(true);
-    return voiceEl.play();
+    const played = voiceEl.play();
+    Promise.resolve(played).catch(() => {}).finally(() => { armingPlay = false; });
+    return played;
+  }
+
+  function viaWeChat(done) {
+    const bridge = window.WeixinJSBridge;
+    if (!bridge?.invoke) return false;
+    bridge.invoke("getNetworkType", {}, () => {
+      unlocked = true;
+      done();
+    });
+    return true;
+  }
+
+  function armAutoplay(text) {
+    armedText = String(text || "").trim().slice(0, MAX_TTS_LEN);
+    if (!armedText) return Promise.resolve("");
+    const fire = () => { playArmed()?.catch(() => {}); };
+    const kick = () => { if (!viaWeChat(fire)) fire(); };
+    if (!window.WeixinJSBridge) {
+      document.addEventListener("WeixinJSBridgeReady", kick, false);
+    }
+    return prime(armedText).then((url) => {
+      if (url) {
+        voiceEl.src = url;
+        voiceEl.load();
+      }
+      kick();
+      return url;
+    });
   }
 
   function speak(text) {
@@ -380,6 +456,8 @@ window.ArtMindAudio = (() => {
     unlock,
     prime,
     playReady,
+    armAutoplay,
+    onSpoken,
     speak,
     stopSpeech,
     startNoise,
