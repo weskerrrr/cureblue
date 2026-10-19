@@ -23,10 +23,6 @@ const ART_EXAMPLES = [
   "海边的灯塔，海浪轻轻拍打",
   "森林里的小木屋，烟囱冒着炊烟",
 ];
-const IMAGE_PROVIDERS = [
-  { id: "cloudflare", label: "Cloudflare", note: "Workers AI Flux Schnell，边缘节点出图，推荐先测这个。" },
-  { id: "pollinations", label: "Pollinations", note: "识别不错，但第三方图床不稳定，可作对照。" },
-];
 const GALLERY_KEY = "artmind_gallery";
 
 function loadGallery() {
@@ -667,7 +663,6 @@ function renderStudio() {
               <img src="${artwork.url}" alt="${escapeHTML(artwork.altText)}" />
               <figcaption>
                 <span class="tag tag-deaf">${escapeHTML(artwork.styleLabel || styleLabel)}风格</span>
-                ${artwork.providerLabel ? `<span class="tag">${escapeHTML(artwork.providerLabel)}</span>` : ""}
                 <strong>${escapeHTML(artwork.prompt)}</strong>
               </figcaption>
             </figure>
@@ -718,17 +713,6 @@ function renderStudio() {
           </div>
         </div>
 
-        <div class="field">
-          <span class="field-label" id="provider-label">生图接口（测试）</span>
-          <div class="art-style-picker provider-picker" role="group" aria-labelledby="provider-label">
-            ${IMAGE_PROVIDERS.map((item) => `
-              <button type="button" class="style-choice ${state.imageProvider === item.id ? "selected" : ""}"
-                data-provider="${item.id}" aria-pressed="${state.imageProvider === item.id}"
-                ${state.generating ? "disabled" : ""}>${item.label}</button>
-            `).join("")}
-          </div>
-        </div>
-
         <div class="compose-actions">
           <button class="btn btn-ghost" id="voice-prompt" ${state.generating ? "disabled" : ""}>🎙️ 语音输入</button>
           <button class="btn btn-primary" data-ai="image" ${state.generating ? "disabled" : ""}>
@@ -740,7 +724,6 @@ function renderStudio() {
             ? `<span class="tag tag-pro">PRO</span> 无限次 AI 创作`
             : `本日剩余免费生成次数：<strong id="quota-num">${state.aiQuotaLeft}</strong> / 3`}
         </div>
-        <p class="service-note">${IMAGE_PROVIDERS.find((item) => item.id === state.imageProvider)?.note || ""}</p>
       </div>
     </div>
 
@@ -779,11 +762,6 @@ function renderStudio() {
     state.artStyle = button.dataset.style;
     renderStudio();
     announce(`已选择${button.textContent}风格`);
-  }));
-  el.querySelectorAll("[data-provider]").forEach((button) => button.addEventListener("click", () => {
-    state.imageProvider = button.dataset.provider;
-    renderStudio();
-    announce(`已切换到${button.textContent}生图接口`);
   }));
   el.querySelectorAll("[data-ai]").forEach((btn) =>
     btn.addEventListener("click", () => runAI(btn.dataset.ai))
@@ -1109,7 +1087,7 @@ async function runAI(kind) {
         if (resp && resp.code === "PRO_REQUIRED") return openPaywall("该能力为会员专享功能。");
         if (resp && resp.code === "FREE_QUOTA_EXCEEDED") return openPaywall("今日免费 AI 生成次数已用完，升级订阅可无限创作。");
         renderStudio();
-        announce(resp?.error || "生成失败，请稍后再试或换一个生图接口。", { assertive: true });
+        announce(resp?.error || "生成失败，请稍后再试。", { assertive: true });
         return;
       }
       if (typeof resp.aiQuotaLeft === "number") {
@@ -1147,7 +1125,7 @@ async function runAI(kind) {
   } catch {
     state.generating = false;
     renderStudio();
-    announce("作画没有成功，可能是网络问题。可换一个生图接口，或稍后重试。", { assertive: true });
+    announce("作画没有成功，可能是网络问题。请稍后重试。", { assertive: true });
   }
 }
 
@@ -1184,7 +1162,7 @@ function renderAIResult(kind, prompt, result) {
     createdAt: new Date().toISOString(),
   };
   renderStudio();
-  announce(result?.providerLabel ? `${desc}（${result.providerLabel}）` : desc);
+  announce(desc);
 }
 
 /* ---------------- 模块二：疗愈任务 ---------------- */
