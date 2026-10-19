@@ -525,6 +525,7 @@ function renderStudioRoom() {
             : `<p class="room-empty">松开之后，画会出现在这里</p>`}
       </div>
       <textarea id="prompt" class="sr-only">${escapeHTML(state.artPrompt)}</textarea>
+      ${state.artPrompt ? `<p class="said-line">${escapeHTML(state.artPrompt)}</p>` : ""}
       <button type="button" class="hold-mic" id="hold-mic" ${state.generating ? "disabled" : ""}>
         <strong>${state.generating ? "请稍候" : "麦克风"}</strong>
         <small>${state.generating ? "正在画" : "按住说话"}</small>
@@ -643,8 +644,17 @@ function renderGalleryRoom() {
     if (recentVerticalSwipe()) return;
     narrateArtwork(art);
   };
+  let heardAt = 0;
+  const hear = (event) => {
+    if (Date.now() - heardAt < 700) return;
+    heardAt = Date.now();
+    if (event?.cancelable) event.preventDefault();
+    narrateArtwork(art);
+  };
   el.querySelector("#art-stage").addEventListener("click", tell);
-  el.querySelector("#art-listen").addEventListener("click", tell);
+  const listen = el.querySelector("#art-listen");
+  listen.addEventListener("click", hear);
+  listen.addEventListener("touchend", hear);
 }
 
 function renderGalleryFocus() {
@@ -1268,6 +1278,7 @@ async function runAI(kind) {
     const canvas = document.getElementById("canvas");
     canvas.innerHTML = `<div class="art-loading"><span class="art-spinner" aria-hidden="true"></span><strong>AI 正在为你作画…</strong><small>请稍候，通常需要 5–30 秒</small></div>`;
     announce("正在为你作画，请稍候。");
+    if (isMobileShell() && prompt) setCaption(prompt);
   }
 
   try {
@@ -1979,6 +1990,39 @@ const TASK_RENDER = {
   },
 
   melody(body, at) {
+    if (isMobileShell()) {
+      const current = () => MELODIES.find((x) => x.id === at.melody);
+      body.innerHTML = `
+        <p class="stage-tip">先听一遍，再点一个最像的形状。</p>
+        <button type="button" class="listen-hit" id="melody-play">播放旋律</button>
+        <div class="shape-grid" role="group" aria-label="旋律的形状">
+          ${MELODY_SHAPES.map((s) => `<button type="button" class="style-choice ${at.shape === s ? "selected" : ""}" data-shape="${s}">${s}</button>`).join("")}
+        </div>
+        <button type="button" class="btn btn-primary btn-block" id="melody-finish" style="margin-top:12px" ${at.listened && at.shape ? "" : "disabled"}>完成</button>`;
+      const finishBtn = body.querySelector("#melody-finish");
+      const refresh = () => { finishBtn.disabled = !(at.listened && at.shape); };
+      body.querySelector("#melody-play").addEventListener("click", () => {
+        const mel = current();
+        window.ArtMindAudio?.playNotes(mel.notes.map((n) => ({ f: 261.63 * 2 ** (n / 12), d: mel.dur })));
+        at.listened = true;
+        announce(`这段是${stripIcon(mel.label)}的旋律。点一个形状。`, { vibrate: false });
+        refresh();
+      });
+      body.querySelectorAll("[data-shape]").forEach((button) =>
+        button.addEventListener("click", () => {
+          at.shape = button.dataset.shape;
+          body.querySelectorAll("[data-shape]").forEach((node) => node.classList.toggle("selected", node.dataset.shape === at.shape));
+          buzz(SHAPE_BUZZ[at.shape]);
+          announce(stripIcon(at.shape), { vibrate: false });
+          refresh();
+        })
+      );
+      finishBtn.addEventListener("click", () => {
+        const mel = current();
+        completeTask(`你把${stripIcon(mel.label)}的旋律想象成了"${stripIcon(at.shape)}"。${mel.reply}`);
+      });
+      return;
+    }
     const current = () => MELODIES.find((x) => x.id === at.melody);
     const bars = (mel) => mel.notes.map((n) => `<span style="height:${24 + n * 5}px;--c:${mel.color}"></span>`).join("");
     body.innerHTML = `
