@@ -664,6 +664,21 @@ html[data-shell="mobile"] textarea {
 }
 .peek-left { left: 8px; }
 .peek-right { right: 8px; }
+html[data-browser="chrome"] .deck,
+html[data-browser="chrome"] .room,
+html[data-browser="chrome"] .hold-mic,
+html[data-browser="chrome"] .art-hit,
+html[data-browser="chrome"] .exercise-swipe,
+html[data-browser="chrome"] .breath-bubble {
+  touch-action: auto;
+}
+html[data-browser="chrome"] .deck-track {
+  touch-action: pan-x;
+  scroll-behavior: auto;
+}
+html[data-browser="chrome"] .room {
+  scroll-snap-stop: normal;
+}
 .task-live, .med-live { align-items: stretch; text-align: left; }
 .caption-bar { z-index: 30; }
 

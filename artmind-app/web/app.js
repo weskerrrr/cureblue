@@ -376,6 +376,10 @@ function isMobileShell() {
   return document.documentElement.dataset.shell !== "desktop";
 }
 
+function isChromeMobile() {
+  return document.documentElement.dataset.browser === "chrome";
+}
+
 function renderView(view) {
   const map = {
     studio: renderStudio,
@@ -453,7 +457,7 @@ function blockMobileSelection() {
 function bindHoldMic(button, onText) {
   let holding = false;
   const start = async (event) => {
-    if (event?.cancelable) event.preventDefault();
+    if (!isChromeMobile() && event?.cancelable) event.preventDefault();
     if (holding || button.disabled) return;
     if (event?.pointerType === "touch") return;
     holding = true;
@@ -477,7 +481,7 @@ function bindHoldMic(button, onText) {
     }, 240);
   };
   const end = async (event) => {
-    if (event?.cancelable) event.preventDefault();
+    if (!isChromeMobile() && event?.cancelable) event.preventDefault();
     clearTimeout(arm);
     if (roomSwipe) {
       holding = false;
@@ -702,12 +706,12 @@ function renderCommunityRoom() {
   let timer = null;
   let holding = false;
   button.addEventListener("touchstart", (event) => {
-    if (event.cancelable) event.preventDefault();
+    if (!isChromeMobile() && event.cancelable) event.preventDefault();
     clearTextSelection();
   }, { passive: false });
   button.addEventListener("pointerdown", (event) => {
     if (state.role === "parent") return;
-    event.preventDefault();
+    if (!isChromeMobile()) event.preventDefault();
     clearTextSelection();
     holding = false;
     timer = setTimeout(async () => {
@@ -1818,7 +1822,7 @@ const TASK_RENDER = {
     };
 
     bubble.addEventListener("touchstart", (event) => {
-      if (event.cancelable) event.preventDefault();
+      if (!isChromeMobile() && event.cancelable) event.preventDefault();
       clearTextSelection();
     }, { passive: false });
     bubble.addEventListener("pointerdown", begin);

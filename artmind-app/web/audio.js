@@ -10,6 +10,7 @@ window.ArtMindAudio = (() => {
   const ua = navigator.userAgent;
   const isIOS = /iP(hone|ad|od)/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   const isMobile = isIOS || /Android|Mobile|MicroMessenger|QQ\//i.test(ua);
+  const isChrome = /Chrome|CriOS/i.test(ua) && !/Edg|OPR|SamsungBrowser|MicroMessenger|QQ\//i.test(ua);
   const hasNativeTTS = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
 
   const SAMPLE_RATE = 22050;
@@ -282,7 +283,8 @@ window.ArtMindAudio = (() => {
   }
 
   function unlock() {
-    playArmed()?.catch(() => {});
+    if (isChrome && armedText && hasNativeTTS) chromeSpeak(armedText, { now: true });
+    else playArmed()?.catch(() => {});
     if (unlocked) return;
     unlocked = true;
     const url = getSilentUrl();
@@ -305,7 +307,7 @@ window.ArtMindAudio = (() => {
       voices.find((v) => /^zh[-_](CN|Hans)/i.test(v.lang)) ||
       voices.find((v) => /^zh/i.test(v.lang) || /Chinese|中文|普通话/i.test(v.name)) ||
       null;
-    if (voices.length && !zhVoice) nativeBroken = true;
+    if (voices.length && !zhVoice && !isChrome) nativeBroken = true;
   }
   if (hasNativeTTS) {
     pickVoice();
@@ -414,9 +416,57 @@ window.ArtMindAudio = (() => {
     return true;
   }
 
+  let liveUtter = null;
+  function chromeSpeak(text, { now = false } = {}) {
+    const clean = String(text || "").trim().slice(0, MAX_TTS_LEN);
+    if (!clean || !hasNativeTTS) return;
+    stopSpeech();
+    const token = speakToken;
+    const utter = new SpeechSynthesisUtterance(clean);
+    liveUtter = utter;
+    utter.lang = "zh-CN";
+    utter.rate = 1;
+    pickVoice();
+    if (zhVoice) utter.voice = zhVoice;
+    let started = false;
+    utter.onstart = () => {
+      if (token !== speakToken) return;
+      started = true;
+      activeLine = clean;
+      if (armedText === clean) armedText = "";
+      notifySpoken(clean);
+      duck(true);
+    };
+    utter.onend = () => { if (token === speakToken) duck(false); };
+    utter.onerror = (event) => {
+      if (token !== speakToken || started) return;
+      if (event.error === "interrupted" || event.error === "canceled") return;
+      nativeBroken = true;
+    };
+    window.setTimeout(() => {
+      if (token !== speakToken) return;
+      window.speechSynthesis.speak(utter);
+      window.speechSynthesis.resume();
+    }, now ? 0 : 50);
+  }
+
   function armAutoplay(text) {
     armedText = String(text || "").trim().slice(0, MAX_TTS_LEN);
     if (!armedText) return Promise.resolve("");
+    if (isChrome && hasNativeTTS) {
+      let said = false;
+      const say = () => {
+        if (said || !armedText) return;
+        said = true;
+        chromeSpeak(armedText);
+      };
+      if (window.speechSynthesis.getVoices().length) say();
+      else {
+        window.speechSynthesis.addEventListener("voiceschanged", say, { once: true });
+        window.setTimeout(say, 500);
+      }
+      return Promise.resolve(armedText);
+    }
     const fire = () => { playArmed()?.catch(() => {}); };
     const kick = () => { if (!viaWeChat(fire)) fire(); };
     if (!window.WeixinJSBridge) {
@@ -439,6 +489,7 @@ window.ArtMindAudio = (() => {
     const token = speakToken;
     const nativeUsable = hasNativeTTS && !nativeBroken;
 
+    if (isChrome && hasNativeTTS && !nativeBroken) return chromeSpeak(clean);
     if (!isMobile && nativeUsable) return nativeSpeak(clean, token);
     if (isMobile && !unlocked) {
       if (nativeUsable) nativeSpeak(clean, token, { fallback: false });
@@ -452,6 +503,7 @@ window.ArtMindAudio = (() => {
   return {
     isIOS,
     isMobile,
+    isChrome,
     get unlocked() { return unlocked; },
     unlock,
     prime,

@@ -12,12 +12,14 @@
         var touchMac = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
         var mobile = /Android|iPhone|iPod|Mobile/i.test(ua) || /iPad/i.test(ua) || touchMac;
         document.documentElement.dataset.shell = mobile ? "mobile" : "desktop";
+        var chrome = /Chrome|CriOS/i.test(ua) && !/Edg|OPR|SamsungBrowser|MicroMessenger|QQ\//i.test(ua);
+        if (chrome) document.documentElement.dataset.browser = "chrome";
       })();
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Noto+Sans+SC:wght@400;600;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=chrome-speak" />
   </head>
   <body data-contrast="normal" data-fontscale="1">
     <a class="skip-link" href="#main">跳到主内容</a>
@@ -162,8 +164,8 @@
     <script src="data.js"></script>
     <script src="api.js"></script>
     <script src="imageGen.js"></script>
-    <script src="audio.js?v=welcome-voice"></script>
+    <script src="audio.js?v=chrome-speak"></script>
     <script src="haptics.js"></script>
-    <script src="app.js?v=welcome-voice"></script>
+    <script src="app.js?v=chrome-speak"></script>
   </body>
 </html>
