@@ -733,3 +733,65 @@ html.void-on .caption-bar {
 }
 html.void-on .caption-icon { display: none; }
 body[data-contrast="high"] #void-root { display: none; }
+
+/* 电脑端：大字、大按钮、白字压在深色底上 */
+html[data-shell="desktop"] {
+  font-size: 122%;
+  --bg: #07080d;
+  --bg-2: #0c1018;
+  --card: #141a26;
+  --text: #fffdf8;
+  --text-dim: #f3e7d2;
+}
+html[data-shell="desktop"] body { background: #07080d; color: #fffdf8; }
+html[data-shell="desktop"] .layout { grid-template-columns: 320px 1fr; }
+html[data-shell="desktop"] .sidenav { background: #05060a; }
+html[data-shell="desktop"] .view-head h1 { font-size: 2.65rem; }
+html[data-shell="desktop"] .view-head p,
+html[data-shell="desktop"] .card p,
+html[data-shell="desktop"] .task-desc { color: #f3e7d2; font-size: 1.08rem; }
+html[data-shell="desktop"] .card h3,
+html[data-shell="desktop"] .section-head h2,
+html[data-shell="desktop"] .stage-head h2 { font-size: 1.45rem; }
+html[data-shell="desktop"] .navbtn,
+html[data-shell="desktop"] .tool,
+html[data-shell="desktop"] .btn-ghost,
+html[data-shell="desktop"] #role-select,
+html[data-shell="desktop"] .example-chip,
+html[data-shell="desktop"] .mood-swatch,
+html[data-shell="desktop"] .weather-card {
+  background: #05060a;
+  color: #ffffff;
+  border: 2px solid #f3eee4;
+}
+html[data-shell="desktop"] .navbtn {
+  min-height: 78px;
+  font-size: 1.2rem;
+  padding: 16px 18px;
+}
+html[data-shell="desktop"] .nav-copy small { color: #f3e7d2; font-size: .95rem; }
+html[data-shell="desktop"] .navbtn.active {
+  background: #f0c14b;
+  color: #1a1406;
+  border-color: #fff6d4;
+}
+html[data-shell="desktop"] .navbtn.active .nav-index,
+html[data-shell="desktop"] .navbtn.active .nav-copy small { color: #1a1406; }
+html[data-shell="desktop"] .tool,
+html[data-shell="desktop"] .btn,
+html[data-shell="desktop"] #role-select {
+  min-height: 58px;
+  font-size: 1.12rem;
+}
+html[data-shell="desktop"] .btn { padding: 14px 22px; }
+html[data-shell="desktop"] .btn-primary {
+  background: #f0c14b;
+  color: #1a1406;
+  border-color: #fff6d4;
+}
+html[data-shell="desktop"] .task-actions .btn,
+html[data-shell="desktop"] .stage-head .btn {
+  min-height: 56px;
+  font-size: 1.08rem;
+  padding: 12px 18px;
+}

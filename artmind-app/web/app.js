@@ -552,8 +552,13 @@ function renderStudioRoom() {
   });
 }
 
+function taskList() {
+  if (!isMobileShell()) return state.tasks;
+  return state.tasks.filter((task) => !["mood", "weather", "triptych"].includes(task.kind));
+}
+
 function currentTask() {
-  const list = state.tasks;
+  const list = taskList();
   state.taskIndex = ((state.taskIndex || 0) % list.length + list.length) % list.length;
   return list[state.taskIndex];
 }
@@ -564,7 +569,7 @@ function stepTask(delta) {
   state.taskIndex += delta;
   const task = currentTask();
   renderTaskLobby();
-  const total = state.tasks.length;
+  const total = taskList().length;
   const index = state.taskIndex + 1;
   announce(`第 ${index} 个练习，${task.title}。在中间上下滑动可以换练习。`);
   return { task, index, total };
@@ -584,7 +589,7 @@ function renderTaskLobby() {
   const el = document.getElementById("view-tasks");
   if (!el) return;
   const next = currentTask();
-  const total = state.tasks.length;
+  const total = taskList().length;
   const index = state.taskIndex + 1;
   el.innerHTML = `
     <div class="room-stage">
@@ -1362,7 +1367,7 @@ function renderTasks() {
     }
     const stageHost = document.getElementById("view-tasks");
     const index = state.taskIndex + 1;
-    const total = state.tasks.length;
+    const total = taskList().length;
     stageHost.innerHTML = `
       <section class="room-stage task-live">
         ${exerciseSwitcher(index, total)}
