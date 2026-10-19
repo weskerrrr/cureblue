@@ -579,13 +579,16 @@ html[data-shell="mobile"] textarea {
 .room-dots span { width: 7px; height: 7px; border-radius: 99px; background: rgba(243,238,228,.28); }
 .room-dots span.on { width: 22px; background: var(--primary); }
 .deck {
-  display: flex; height: 100dvh; overflow: hidden;
-  scroll-behavior: auto; touch-action: none;
+  height: 100dvh; overflow: hidden; touch-action: none;
   perspective: none; padding: 0;
 }
-.deck::-webkit-scrollbar { display: none; }
+.deck-track {
+  display: flex; height: 100%; width: 600%;
+  transform: translate3d(-16.6667%, 0, 0);
+  touch-action: none;
+}
 .room {
-  flex: 0 0 100%; width: 100%; height: 100dvh; scroll-snap-align: start; scroll-snap-stop: always;
+  flex: 0 0 16.6667%; width: 16.6667%; height: 100dvh;
   overflow: hidden; touch-action: none;
   padding: calc(72px + env(safe-area-inset-top)) 22px calc(96px + env(safe-area-inset-bottom));
 }
@@ -648,12 +651,15 @@ html[data-shell="mobile"] textarea {
 }
 .room-hint { color: var(--text-dim); font-size: .92rem; margin: 14px 0 0; }
 .peek {
-  position: fixed; top: 36%; z-index: 25; writing-mode: vertical-rl;
-  color: rgba(243,238,228,.9); letter-spacing: .2em; font-size: .92rem;
-  pointer-events: auto; min-height: 148px; padding: 28px 16px; background: transparent; border: 0;
+  position: fixed; top: 50%; z-index: 40; writing-mode: vertical-rl;
+  transform: translateY(-50%); min-width: 52px; min-height: 132px; padding: 18px 10px;
+  border-radius: 18px; border: 1px solid rgba(231, 194, 122, .85);
+  background: rgba(26, 20, 6, .78); color: #e7c27a;
+  letter-spacing: .16em; font-size: 1rem; font-weight: 800;
+  touch-action: manipulation;
 }
-.peek-left { left: 6px; }
-.peek-right { right: 6px; }
+.peek-left { left: 8px; }
+.peek-right { right: 8px; }
 .task-live, .med-live { align-items: stretch; text-align: left; }
 .caption-bar { z-index: 30; }
 

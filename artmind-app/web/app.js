@@ -197,11 +197,22 @@ function trackIndex(view) {
   return Math.max(0, TRACK.indexOf(view));
 }
 
+let roomSlot = 1;
+
+function deckTrack() {
+  return document.querySelector("#main > .deck-track");
+}
+
+function placeDeck(index, animate = false) {
+  const track = deckTrack();
+  if (!track) return;
+  roomSlot = index;
+  track.style.transition = animate ? "transform .26s ease" : "none";
+  track.style.transform = `translate3d(${-(index * 100) / TRACK.length}%, 0, 0)`;
+}
+
 function scrollToRoom(view, behavior = "smooth") {
-  const deck = document.getElementById("main");
-  const index = trackIndex(view);
-  if (!deck || index < 0) return;
-  deck.scrollTo({ left: index * deck.clientWidth, behavior });
+  placeDeck(trackIndex(view), behavior !== "auto");
 }
 
 function switchDesktopView(view) {
@@ -278,26 +289,18 @@ let roomSwipe = false;
 let lastRoomStep = 0;
 
 function bindDeck() {
-  const deck = document.getElementById("main");
-  if (!deck) return;
-  const width = () => Math.max(1, deck.clientWidth || window.innerWidth);
-  const indexNow = () => {
-    const index = Math.round(deck.scrollLeft / width());
-    if (TRACK[index]) return index;
-    return trackIndex(state.view || "studio");
-  };
-  const placeAt = (index) => {
-    deck.style.scrollBehavior = "auto";
-    deck.scrollLeft = index * width();
-  };
+  if (!deckTrack()) return;
+  placeDeck(trackIndex(state.view || "studio"), false);
   const stepRoom = (direction) => {
     const now = Date.now();
     if (now - lastRoomStep < 420) return;
     lastRoomStep = now;
-    const dest = Math.max(0, Math.min(TRACK.length - 1, indexNow() + direction));
+    const dest = roomSlot + direction;
+    if (dest < 0 || dest >= TRACK.length) return;
     const looping = dest === 0 || dest === TRACK.length - 1;
     const view = looping ? (dest === 0 ? "community" : "studio") : TRACK[dest];
-    placeAt(looping ? trackIndex(view) : dest);
+    placeDeck(dest, true);
+    if (looping) window.setTimeout(() => placeDeck(trackIndex(view), false), 280);
     const first = !welcomeSaid || Date.now() - welcomeAt < 1600;
     if (view && view !== state.view) switchView(view, { scroll: false, speak: !first });
     if (!welcomeSaid) {
@@ -312,70 +315,80 @@ function bindDeck() {
   let startY = 0;
   let tracking = false;
   let axis = "";
-  const skip = (target) => target?.closest?.("input, textarea, select, .paint-canvas");
-  const begin = (x, y, target) => {
-    if (skip(target)) {
-      tracking = false;
-      return;
-    }
+  let pointerId = null;
+  const skip = (target) => target?.closest?.("input, textarea, select, .paint-canvas, .room-top");
+  const arm = (x, y) => {
     tracking = true;
     axis = "";
     roomSwipe = false;
     startX = x;
     startY = y;
   };
-  const move = (x, y, event) => {
+  const drag = (x, y, event) => {
     if (!tracking) return;
     const dx = x - startX;
     const dy = y - startY;
     if (!axis && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
-      axis = Math.abs(dx) > Math.abs(dy) * 0.8 ? "x" : "y";
+      axis = Math.abs(dx) > Math.abs(dy) * 0.75 ? "x" : "y";
     }
     if (axis !== "x") return;
     roomSwipe = true;
-    if (event.cancelable) event.preventDefault();
+    if (event?.cancelable) event.preventDefault();
   };
-  const finish = (x, y) => {
+  const release = (x, y) => {
     if (!tracking) return;
     tracking = false;
     const dx = x - startX;
     const dy = y - startY;
-    if (Math.abs(dx) < 24 || Math.abs(dx) < Math.abs(dy)) {
+    if (Math.abs(dx) < 28 || Math.abs(dx) < Math.abs(dy)) {
       roomSwipe = false;
       return;
     }
     roomSwipe = true;
     stepRoom(dx < 0 ? 1 : -1);
   };
-
+  document.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || skip(event.target)) return;
+    pointerId = event.pointerId;
+    arm(event.clientX, event.clientY);
+    try { event.target.setPointerCapture?.(event.pointerId); } catch {}
+  }, { capture: true });
+  document.addEventListener("pointermove", (event) => {
+    if (event.pointerId !== pointerId) return;
+    drag(event.clientX, event.clientY, event);
+  }, { capture: true });
+  document.addEventListener("pointerup", (event) => {
+    if (event.pointerId !== pointerId) return;
+    release(event.clientX, event.clientY);
+  }, { capture: true });
+  document.addEventListener("pointercancel", (event) => {
+    if (event.pointerId !== pointerId) return;
+    if (axis === "x") release(event.clientX, event.clientY);
+    else tracking = false;
+  }, { capture: true });
   document.addEventListener("touchstart", (event) => {
-    if (event.touches.length !== 1) return;
+    if (event.touches.length !== 1 || skip(event.target)) return;
     const point = event.touches[0];
-    begin(point.clientX, point.clientY, event.target);
+    arm(point.clientX, point.clientY);
   }, { capture: true, passive: true });
   document.addEventListener("touchmove", (event) => {
-    if (!tracking || event.touches.length !== 1) return;
+    if (event.touches.length !== 1) return;
     const point = event.touches[0];
-    move(point.clientX, point.clientY, event);
+    drag(point.clientX, point.clientY, event);
   }, { capture: true, passive: false });
   document.addEventListener("touchend", (event) => {
     const point = event.changedTouches?.[0];
     if (!point) return;
-    finish(point.clientX, point.clientY);
+    release(point.clientX, point.clientY);
   }, { capture: true });
   document.addEventListener("touchcancel", (event) => {
     const point = event.changedTouches?.[0];
-    if (point && axis === "x") finish(point.clientX, point.clientY);
+    if (point && axis === "x") release(point.clientX, point.clientY);
     else tracking = false;
   }, { capture: true });
 
-  const bindPeek = (id, direction) => {
-    const node = document.getElementById(id);
-    if (!node) return;
-    node.addEventListener("click", () => stepRoom(direction));
-  };
-  bindPeek("peek-left", -1);
-  bindPeek("peek-right", 1);
+  document.getElementById("peek-left")?.addEventListener("click", () => stepRoom(-1));
+  document.getElementById("peek-right")?.addEventListener("click", () => stepRoom(1));
 }
 
 let lastVerticalSwipeAt = 0;
@@ -515,7 +528,6 @@ function bindHoldMic(button, onText) {
   };
   let arm = 0;
   const beginTouch = (event) => {
-    if (event.cancelable) event.preventDefault();
     clearTextSelection();
     clearTimeout(arm);
     arm = setTimeout(() => {
@@ -2816,12 +2828,6 @@ async function init() {
   blockMobileSelection();
   window.ArtMindVoid?.start();
   window.ArtMindVoid?.setRoom("studio");
-  const deck = document.getElementById("main");
-  if (deck) {
-    deck.style.scrollBehavior = "auto";
-    deck.scrollLeft = deck.clientWidth || window.innerWidth;
-    deck.style.scrollBehavior = "";
-  }
   bindDeck();
   bindVerticalCycle(document.getElementById("view-tasks"), (delta) => {
     if (state.view !== "tasks") return;
@@ -2835,11 +2841,7 @@ async function init() {
   await bootstrapBackend();
   ROOMS.forEach((view) => renderView(view));
   syncClones();
-  if (deck) {
-    deck.style.scrollBehavior = "auto";
-    deck.scrollLeft = deck.clientWidth;
-    deck.style.scrollBehavior = "";
-  }
+  placeDeck(trackIndex("studio"), false);
   state.view = "studio";
   updateRoomChrome();
   orient("studio", { speak: false });

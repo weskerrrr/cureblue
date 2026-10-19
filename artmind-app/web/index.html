@@ -106,16 +106,18 @@
         <span id="plan-badge" class="plan-badge plan-free" hidden>免费版</span>
       </header>
 
-      <div class="peek peek-left" id="peek-left" aria-hidden="true"></div>
-      <div class="peek peek-right" id="peek-right" aria-hidden="true"></div>
+      <button type="button" class="peek peek-left" id="peek-left" aria-label="上一个模块"></button>
+      <button type="button" class="peek peek-right" id="peek-right" aria-label="下一个模块"></button>
 
       <main id="main" class="deck" tabindex="-1">
-        <section class="room view room-clone" id="clone-before" aria-hidden="true" inert></section>
-        <section id="view-studio" class="room view" data-room="studio" aria-label="创作"></section>
-        <section id="view-tasks" class="room view" data-room="tasks" aria-label="疗愈"></section>
-        <section id="view-gallery" class="room view" data-room="gallery" aria-label="欣赏"></section>
-        <section id="view-community" class="room view" data-room="community" aria-label="社区"></section>
-        <section class="room view room-clone" id="clone-after" aria-hidden="true" inert></section>
+        <div class="deck-track">
+          <section class="room view room-clone" id="clone-before" aria-hidden="true" inert></section>
+          <section id="view-studio" class="room view" data-room="studio" aria-label="创作"></section>
+          <section id="view-tasks" class="room view" data-room="tasks" aria-label="疗愈"></section>
+          <section id="view-gallery" class="room view" data-room="gallery" aria-label="欣赏"></section>
+          <section id="view-community" class="room view" data-room="community" aria-label="社区"></section>
+          <section class="room view room-clone" id="clone-after" aria-hidden="true" inert></section>
+        </div>
       </main>
 
       <div class="a11y-tools room-tools" hidden>
